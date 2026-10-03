@@ -1,6 +1,13 @@
 name: iPhone Stock Watch
 
 on:
+  push:
+    paths:
+      - "watch.py"
+      - "requirements.txt"
+      - ".github/workflows/stock-watch.yml"
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -27,6 +34,16 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Verify notification secret
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          if [ -z "$NTFY_TOPIC" ]; then
+            echo "NTFY_TOPIC secret is not configured"
+            exit 1
+          fi
+          echo "Notification secret is configured"
 
       - name: Check stock
         env:
