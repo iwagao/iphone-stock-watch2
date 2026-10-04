@@ -7,7 +7,7 @@ on:
       - "requirements.txt"
       - ".github/workflows/stock-watch.yml"
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -45,7 +45,7 @@ jobs:
           fi
           echo "Notification secret is configured"
 
-      - name: Check stock
+      - name: Check four stores via Jina
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python watch.py
