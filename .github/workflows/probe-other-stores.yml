@@ -1,0 +1,45 @@
+name: Probe Other Stores
+
+on:
+  push:
+    paths:
+      - ".github/workflows/probe-other-stores.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Probe direct and Jina access
+        shell: bash
+        run: |
+          set +e
+          urls=(
+            "Amazon.co.jp|https://www.amazon.co.jp/dp/B0HJ9ZYXPV"
+            "ビックカメラ|https://www.biccamera.com/bc/item/15593282/"
+            "エディオン|https://www.edion.com/detail.html?p_cd=00086916134"
+            "ノジマオンライン|https://online.nojima.co.jp/commodity/1/4549995734546/"
+            "Joshin web|https://joshinweb.jp/search/?KEYWORD=4549995734546"
+          )
+
+          for item in "${urls[@]}"; do
+            name="${item%%|*}"
+            url="${item#*|}"
+            echo "=== $name ==="
+
+            code=$(curl -L -sS --max-time 35 -A "Mozilla/5.0" -o direct.txt -w "%{http_code}" "$url")
+            bytes=$(wc -c < direct.txt 2>/dev/null || echo 0)
+            jan=$(grep -Foc "4549995734546" direct.txt 2>/dev/null || true)
+            model=$(grep -Fic "MJX54J/A" direct.txt 2>/dev/null || true)
+            echo "DIRECT http=$code bytes=$bytes jan=$jan model=$model"
+
+            code=$(curl -L -sS --max-time 45 -A "Mozilla/5.0" -H "Accept: text/plain" -o jina.txt -w "%{http_code}" "https://r.jina.ai/$url")
+            bytes=$(wc -c < jina.txt 2>/dev/null || echo 0)
+            jan=$(grep -Foc "4549995734546" jina.txt 2>/dev/null || true)
+            model=$(grep -Fic "MJX54J/A" jina.txt 2>/dev/null || true)
+            blocked=$(grep -Eic "Access Denied|Just a moment|CAPTCHA|アクセスを遮断しました" jina.txt 2>/dev/null || true)
+            echo "JINA http=$code bytes=$bytes jan=$jan model=$model blocked=$blocked"
+          done
