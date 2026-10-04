@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -42,26 +43,38 @@ TARGETS = [
 
 
 def fetch_direct(url):
-    r = requests.get(
+    # Amazon returns a short bot/interstitial response to requests in some
+    # GitHub-hosted runners. curl over HTTP/1.1 has proven more reliable.
+    cmd = [
+        "curl",
+        "--http1.1",
+        "-L",
+        "-sS",
+        "--fail",
+        "--max-time",
+        "40",
+        "-A",
+        (
+            "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro XL) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/140.0 Mobile Safari/537.36"
+        ),
+        "-H",
+        "Accept-Language: ja-JP,ja;q=0.9,en;q=0.8",
+        "-H",
+        "Cache-Control: no-cache",
         url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro XL) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/140.0 Mobile Safari/537.36"
-            ),
-            "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
-            "Cache-Control": "no-cache",
-        },
-        timeout=40,
-        allow_redirects=True,
-    )
-    r.raise_for_status()
-    text = r.text
-    if len(text) < 100000:
-        raise RuntimeError("Amazon response too short")
-    return text
+    ]
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+    if p.returncode != 0:
+        raise RuntimeError(f"Amazon curl failed: {p.stderr.strip()[:160]}")
 
+    text = p.stdout
+    if len(text) < 100000:
+        raise RuntimeError(f"Amazon response too short ({len(text)} bytes)")
+    if MODEL.lower() not in text.lower():
+        raise RuntimeError("Amazon exact model missing from response")
+    return text
 
 def fetch_jina(url):
     r = requests.get(
