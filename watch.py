@@ -96,6 +96,14 @@ def extract_prices(text):
                 pass
     return sorted(p for p in vals if 180000 <= p <= 400000)
 
+def choose_price(prices):
+    if MAX_PRICE in prices:
+        return MAX_PRICE
+    under = [p for p in prices if p <= MAX_PRICE]
+    if under:
+        return max(under)
+    return min(prices)
+
 def windows_for_markers(text, markers, radius=1200):
     low = text.lower()
     windows = []
@@ -211,13 +219,14 @@ def notify(target, reason):
         "タップして購入ページを確認してください。"
     )
     r = requests.post(
-        "https://ntfy.sh/" + quote(NTFY_TOPIC),
-        data=message.encode("utf-8"),
-        headers={
-            "Title": "iPhone 定価在庫復活",
-            "Priority": "5",
-            "Tags": "iphone,shopping_cart",
-            "Click": target["url"],
+        "https://ntfy.sh",
+        json={
+            "topic": NTFY_TOPIC,
+            "message": message,
+            "title": "iPhone 定価在庫復活",
+            "priority": 5,
+            "tags": ["iphone", "shopping_cart"],
+            "click": target["url"],
         },
         timeout=15,
     )
