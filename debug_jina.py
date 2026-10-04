@@ -5,12 +5,18 @@ TARGETS={
 "ケーズ":"https://www.ksdenki.com/shop/g/g4549995734546/",
 "ヨドバシ":"https://www.yodobashi.com/?word=MJX54J%2FA",
 }
-markers=["MJX54J/A","4549995734546","iPhone 18 Pro Max"]
+KEYS=["MJX54J/A","4549995734546","239,800","239800","カートに入れる","在庫あり","在庫なし","販売終了","予約終了","現在在庫切れ","Add to cart","Buy Now","Amazon.co.jp"]
 for name,url in TARGETS.items():
     t=requests.get("https://r.jina.ai/"+url,headers={"Accept":"text/plain","User-Agent":"Mozilla/5.0"},timeout=45).text
-    low=t.lower()
-    poss=[low.find(m.lower()) for m in markers if low.find(m.lower())>=0]
-    p=min(poss) if poss else 0
-    s=re.sub(r"\s+"," ",t[max(0,p-2500):p+5000])
-    print("\n###",name,"###")
-    print(s[:7000])
+    print("\n###",name,"chars",len(t),"###")
+    for key in KEYS:
+        poss=[m.start() for m in re.finditer(re.escape(key),t,re.I)]
+        if poss:
+            print(key, poss[:12], "count", len(poss))
+    for m in re.finditer(r"(?:[￥¥]\s*)?[0-9]{1,3}(?:,[0-9]{3})+(?:\s*円)?",t):
+        s=m.group(0)
+        digits=int(re.sub(r"\D","",s) or 0)
+        if 180000 <= digits <= 300000:
+            p=m.start()
+            ctx=re.sub(r"\s+"," ",t[max(0,p-160):p+220])
+            print("PRICECTX",ctx)
