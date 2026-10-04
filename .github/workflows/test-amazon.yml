@@ -27,3 +27,5 @@ jobs:
           text = watch.fetch_direct("https://www.amazon.co.jp/dp/B0HJ9ZYXPV")
           print("AMAZON_TEST", watch.check_amazon(text))
           PY
+
+# retry after HTTP/1.1 fetch fix
