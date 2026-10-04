@@ -3,10 +3,8 @@ import os
 import re
 import sys
 from pathlib import Path
-from urllib.parse import quote
 
 import requests
-from bs4 import BeautifulSoup
 
 MODEL = "MJX54J/A"
 JAN = "4549995734546"
@@ -14,24 +12,9 @@ MAX_PRICE = 239800
 NTFY_TOPIC = os.environ["NTFY_TOPIC"]
 STATE_FILE = Path("state.json")
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro XL) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/140.0 Mobile Safari/537.36"
-    ),
-    "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
-}
-
 TARGETS = [
     {
-        "name": "Amazon.co.jp",
-        "mode": "direct_amazon",
-        "url": "https://www.amazon.co.jp/dp/B0HJ9ZYXPV",
-    },
-    {
         "name": "ヤマダウェブコム",
-        "mode": "jina",
         "url": "https://www.yamada-denkiweb.com/7164953012/",
         "check_url": "https://www.yamada-denkiweb.com/7164953012/",
         "markers": [MODEL, JAN],
@@ -40,7 +23,6 @@ TARGETS = [
     },
     {
         "name": "ケーズデンキ",
-        "mode": "jina",
         "url": "https://www.ksdenki.com/shop/g/g4549995734546/",
         "check_url": "https://www.ksdenki.com/shop/r/r09023124_m4900030718_og/",
         "markers": [MODEL, JAN],
@@ -49,7 +31,6 @@ TARGETS = [
     },
     {
         "name": "ヨドバシカメラ",
-        "mode": "jina",
         "url": "https://www.yodobashi.com/?word=MJX54J%2FA",
         "check_url": "https://www.yodobashi.com/?word=MJX54J%2FA",
         "markers": [MODEL, JAN],
@@ -57,11 +38,6 @@ TARGETS = [
         "negative": ["予定数の販売を終了しました", "予定数の販売を終了", "販売終了", "在庫なし"],
     },
 ]
-
-def fetch_direct(url):
-    r = requests.get(url, headers=HEADERS, timeout=20, allow_redirects=True)
-    r.raise_for_status()
-    return r.text
 
 def fetch_jina(url):
     r = requests.get(
@@ -122,7 +98,7 @@ def windows_for_markers(text, markers, radius=1200):
             start = p + 1
     return windows
 
-def check_jina(text, target):
+def check_target(text, target):
     windows = windows_for_markers(text, target["markers"])
     if not windows:
         return None, "product marker not found"
@@ -136,66 +112,21 @@ def check_jina(text, target):
         score = (3 if prices else 0) + len(pos) * 2 + len(neg) * 2
         if score > best_score:
             best_score = score
-            best = (w, prices, pos, neg)
+            best = (prices, pos, neg)
 
-    _, prices, pos, neg = best
+    prices, pos, neg = best
     if not prices:
         return None, "price not found"
-    price = choose_price(prices)
 
+    price = choose_price(prices)
     if neg:
         return False, f"{neg[0]} / {price:,}円"
     if price > MAX_PRICE:
         return False, f"{price:,}円 > {MAX_PRICE:,}円"
     if not pos:
-        return None, f"purchase/stock phrase not found / {price:,}円"
+        return None, f"stock phrase not found / {price:,}円"
 
     return True, f"{pos[0]} / {price:,}円"
-
-def check_amazon(html):
-    soup = BeautifulSoup(html, "html.parser")
-    page_text = " ".join(soup.stripped_strings)
-
-    # URL is the exact ASIN for the monitored model. Amazon sometimes omits
-    # #productTitle for automated requests, so availability/price/seller are
-    # used as the authoritative checks instead of failing on the title alone.
-
-    availability = soup.select_one("#availability")
-    availability_text = availability.get_text(" ", strip=True) if availability else ""
-    for bad in ["現在在庫切れです", "一時的に在庫切れ", "現在お取り扱いできません"]:
-        if bad in availability_text:
-            return False, bad
-
-    price_text = ""
-    for selector in [
-        "#corePriceDisplay_desktop_feature_div .a-offscreen",
-        "#corePrice_feature_div .a-offscreen",
-        ".a-price .a-offscreen",
-    ]:
-        el = soup.select_one(selector)
-        if el:
-            price_text = el.get_text(" ", strip=True)
-            break
-
-    prices = extract_prices(price_text or page_text)
-    if not prices:
-        return None, "price not found"
-    price = choose_price(prices)
-    if price > MAX_PRICE:
-        return False, f"{price:,}円 > {MAX_PRICE:,}円"
-
-    if not (soup.select_one("#add-to-cart-button") or soup.select_one("#buy-now-button")):
-        return False, "purchase button not found"
-
-    merchant = ""
-    for selector in ["#merchant-info", "#sellerProfileTriggerId"]:
-        el = soup.select_one(selector)
-        if el:
-            merchant += " " + el.get_text(" ", strip=True)
-    if "Amazon.co.jp" not in merchant:
-        return False, "seller is not Amazon.co.jp"
-
-    return True, f"Amazon.co.jp / {price:,}円"
 
 def load_state():
     if not STATE_FILE.exists():
@@ -214,7 +145,7 @@ def save_state(state):
 
 def notify(target, reason):
     message = (
-        f"{target['name']}で iPhone 18 Pro Max 256GB ブラックの購入可能在庫を検知しました。\n"
+        f"{target['name']}で iPhone 18 Pro Max 256GB ブラックの在庫候補を検知しました。\n"
         f"{reason}\n"
         "タップして購入ページを確認してください。"
     )
@@ -223,7 +154,7 @@ def notify(target, reason):
         json={
             "topic": NTFY_TOPIC,
             "message": message,
-            "title": "iPhone 定価在庫復活",
+            "title": "iPhone 在庫候補",
             "priority": 5,
             "tags": ["iphone", "shopping_cart"],
             "click": target["url"],
@@ -239,11 +170,7 @@ def main():
         name = target["name"]
         before = bool(state.get(name, False))
         try:
-            if target["mode"] == "direct_amazon":
-                available, reason = check_amazon(fetch_direct(target["url"]))
-            else:
-                available, reason = check_jina(fetch_jina(target["check_url"]), target)
-
+            available, reason = check_target(fetch_jina(target["check_url"]), target)
             status = "UNKNOWN" if available is None else ("IN STOCK" if available else "OUT")
             print(f"{name}: {status} ({reason})")
 
