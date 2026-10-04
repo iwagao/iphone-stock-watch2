@@ -7,11 +7,13 @@ on:
       - "requirements.txt"
       - ".github/workflows/stock-watch.yml"
   schedule:
-    - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
+    # Recovery trigger only. Normal monitoring is chained by workflow_dispatch below.
+    - cron: "2 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: iphone-stock-watch
@@ -20,7 +22,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -62,3 +64,12 @@ jobs:
           git commit -m "Update stock state"
           git pull --rebase origin main
           git push
+
+      - name: Start next check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The setup/check itself takes some time; 240 s keeps start-to-start
+          # cadence close to five minutes without an external scheduler.
+          sleep 240
+          gh workflow run stock-watch.yml --ref main
