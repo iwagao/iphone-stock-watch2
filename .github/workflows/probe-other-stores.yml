@@ -11,25 +11,21 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 3
     steps:
-      - name: Retry Amazon and Bic
+      - name: Inspect Amazon product fields
         shell: bash
         run: |
           set +e
+          rm -f amazon.html
           ua="Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36"
-          urls=(
-            "Amazon.co.jp|https://www.amazon.co.jp/dp/B0HJ9ZYXPV"
-            "ビックカメラ|https://www.biccamera.com/bc/item/15593282/"
-          )
-          for item in "${urls[@]}"; do
-            name="${item%%|*}"; url="${item#*|}"
-            echo "=== $name RETRY ==="
-            code=$(curl --http1.1 -L -sS --max-time 40 -A "$ua" -H "Accept-Language: ja-JP,ja;q=0.9" -o direct.txt -w "%{http_code}" "$url")
-            bytes=$(wc -c < direct.txt 2>/dev/null || echo 0)
-            jan=$(grep -Foc "4549995734546" direct.txt 2>/dev/null || true)
-            model=$(grep -Fic "MJX54J/A" direct.txt 2>/dev/null || true)
-            captcha=$(grep -Eic "captcha|robot|automated access|Access Denied|アクセスを遮断" direct.txt 2>/dev/null || true)
-            title=$(grep -oi '<title[^>]*>[^<]*' direct.txt 2>/dev/null | head -1 | sed 's/<title[^>]*>//I' | tr '\n' ' ')
-            echo "DIRECT http=$code bytes=$bytes jan=$jan model=$model blockwords=$captcha title=$title"
-          done
+          url="https://www.amazon.co.jp/dp/B0HJ9ZYXPV"
+          code=$(curl --http1.1 -L -sS --max-time 40 -A "$ua" -H "Accept-Language: ja-JP,ja;q=0.9" -o amazon.html -w "%{http_code}" "$url")
+          echo "HTTP=$code BYTES=$(wc -c < amazon.html 2>/dev/null || echo 0)"
+          echo "MODEL=$(grep -Fic 'MJX54J/A' amazon.html 2>/dev/null || true)"
+          echo "PRICE_239800=$(grep -Fc '239,800' amazon.html 2>/dev/null || true)"
+          echo "ADD_CART=$(grep -Fic 'add-to-cart-button' amazon.html 2>/dev/null || true)"
+          echo "BUY_NOW=$(grep -Fic 'buy-now-button' amazon.html 2>/dev/null || true)"
+          echo "MERCHANT=$(grep -Fic 'merchant-info' amazon.html 2>/dev/null || true)"
+          echo "AMAZON_SELLER=$(grep -Fic 'Amazon.co.jp' amazon.html 2>/dev/null || true)"
+          echo "OUT_OF_STOCK=$(grep -Eic '現在在庫切れです|一時的に在庫切れ|現在お取り扱いできません' amazon.html 2>/dev/null || true)"
