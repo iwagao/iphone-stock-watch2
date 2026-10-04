@@ -24,9 +24,9 @@ TARGETS = [
     {
         "name": "ケーズデンキ",
         "url": "https://www.ksdenki.com/shop/g/g4549995734546/",
-        "check_url": "https://www.ksdenki.com/shop/r/r09023124_m4900030718_og/",
+        "check_url": "https://www.ksdenki.com/shop/g/g4549995734546/",
         "markers": [MODEL, JAN],
-        "positive": ["在庫限り"],
+        "positive": ["在庫あり", "在庫限り", "カートに入れる"],
         "negative": ["販売終了", "予約終了", "在庫なし", "売り切れ"],
     },
     {
@@ -119,6 +119,8 @@ def check_target(text, target):
         return None, "price not found"
 
     price = choose_price(prices)
+    # A negative sales-status phrase always wins over positive phrases.
+    # This prevents related/recommended-item text from causing a false alert.
     if neg:
         return False, f"{neg[0]} / {price:,}円"
     if price > MAX_PRICE:
