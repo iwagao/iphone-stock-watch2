@@ -15,6 +15,12 @@ STATE_FILE = Path("state.json")
 
 TARGETS = [
     {
+        "name": "Amazon.co.jp",
+        "site": "amazon",
+        "url": "https://www.amazon.co.jp/dp/B0HJ9ZYXPV",
+        "check_url": "https://www.amazon.co.jp/dp/B0HJ9ZYXPV",
+    },
+    {
         "name": "ヤマダウェブコム",
         "site": "yamada",
         "url": "https://www.yamada-denkiweb.com/7164953012/",
@@ -33,6 +39,28 @@ TARGETS = [
         "check_url": "https://www.yodobashi.com/?word=MJX54J%2FA",
     },
 ]
+
+
+def fetch_direct(url):
+    r = requests.get(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro XL) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/140.0 Mobile Safari/537.36"
+            ),
+            "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
+            "Cache-Control": "no-cache",
+        },
+        timeout=40,
+        allow_redirects=True,
+    )
+    r.raise_for_status()
+    text = r.text
+    if len(text) < 100000:
+        raise RuntimeError("Amazon response too short")
+    return text
 
 
 def fetch_jina(url):
@@ -223,7 +251,66 @@ def check_yodobashi(chunks):
     return None, "Yodobashi requires stock phrase + cart action"
 
 
+def check_amazon(html):
+    # Exact ASIN URL + exact model string are both required.
+    if MODEL.lower() not in html.lower():
+        return None, "exact Amazon model not confirmed"
+
+    # Only inspect the product availability area for a negative state.
+    availability_pos = html.lower().find('id="availability"')
+    availability_block = ""
+    if availability_pos >= 0:
+        availability_block = html[availability_pos:availability_pos + 12000]
+
+    negative = [
+        "現在在庫切れです",
+        "一時的に在庫切れ",
+        "現在お取り扱いできません",
+    ]
+    for phrase in negative:
+        if phrase in availability_block or phrase in html:
+            return False, f"{phrase} / exact Amazon product"
+
+    # A positive result is deliberately strict:
+    # purchase button + Amazon seller + target price <= MAX_PRICE.
+    has_cart = (
+        'id="add-to-cart-button"' in html
+        or 'id="buy-now-button"' in html
+        or 'name="submit.add-to-cart"' in html
+    )
+    if not has_cart:
+        return False, "Amazon purchase button not found"
+
+    merchant_pos = html.lower().find('id="merchant-info"')
+    if merchant_pos < 0:
+        return None, "Amazon merchant field not found"
+    merchant_block = html[merchant_pos:merchant_pos + 10000]
+    if "Amazon.co.jp" not in merchant_block:
+        return False, "seller is not Amazon.co.jp"
+
+    price_block = html
+    for marker in [
+        'id="corepricedisplay_desktop_feature_div"',
+        'id="coreprice_feature_div"',
+    ]:
+        p = html.lower().find(marker)
+        if p >= 0:
+            price_block = html[p:p + 20000]
+            break
+
+    price = choose_target_price(price_block)
+    if price is None:
+        return None, "Amazon target price not confirmed"
+    if price > MAX_PRICE:
+        return False, f"{price:,}円 > {MAX_PRICE:,}円"
+
+    return True, f"Amazon.co.jp + purchase button / {price:,}円"
+
+
 def check_target(text, target):
+    if target["site"] == "amazon":
+        return check_amazon(text)
+
     chunks = product_chunks(text)
     if not chunks:
         return None, "exact MODEL + JAN product block not found"
@@ -300,14 +387,15 @@ def main():
         before = bool(state.get(name, False))
 
         try:
-            available, reason = check_target(fetch_jina(target["check_url"]), target)
+            fetcher = fetch_direct if target["site"] == "amazon" else fetch_jina
+            available, reason = check_target(fetcher(target["check_url"]), target)
 
             # False positives are costlier than missed alerts. A positive result
             # must therefore be reproduced by a second independent fetch.
             if available is True:
                 time.sleep(3)
                 confirm, confirm_reason = check_target(
-                    fetch_jina(target["check_url"]), target
+                    fetcher(target["check_url"]), target
                 )
                 if confirm is not True:
                     available = None
