@@ -1,0 +1,29 @@
+name: Test Amazon Strict Check
+
+on:
+  push:
+    paths:
+      - ".github/workflows/test-amazon.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --disable-pip-version-check --no-cache-dir -r requirements.txt
+      - name: Run Amazon parser only
+        env:
+          NTFY_TOPIC: test-only
+        run: |
+          python - <<'PY'
+          import watch
+          text = watch.fetch_direct("https://www.amazon.co.jp/dp/B0HJ9ZYXPV")
+          print("AMAZON_TEST", watch.check_amazon(text))
+          PY
