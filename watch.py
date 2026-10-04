@@ -273,7 +273,23 @@ def notify(target, reason):
         },
         timeout=15,
     )
-    r.raise_for_status()
+
+    try:
+        payload = r.json()
+    except ValueError:
+        payload = {}
+
+    if not r.ok:
+        print(
+            f"NOTIFY FAILED: {target['name']} / HTTP {r.status_code}",
+            file=sys.stderr,
+        )
+        r.raise_for_status()
+
+    msg_id = payload.get("id", "unknown")
+    print(
+        f"NOTIFY SENT: {target['name']} / HTTP {r.status_code} / message-id {msg_id}"
+    )
 
 
 def main():
