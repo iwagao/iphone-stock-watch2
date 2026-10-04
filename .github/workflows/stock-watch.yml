@@ -1,14 +1,9 @@
 name: iPhone Stock Watch
 
 on:
-  push:
-    paths:
-      - "watch.py"
-      - "requirements.txt"
-      - ".github/workflows/stock-watch.yml"
+  # Hourly recovery only. Normal monitoring continues with workflow_dispatch.
   schedule:
-    # Recovery trigger only. Normal monitoring is chained by workflow_dispatch below.
-    - cron: "2 * * * *"
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -21,23 +16,58 @@ concurrency:
 
 jobs:
   check:
+    # Safety valve: do not consume runner time if this repository is made private.
+    if: ${{ github.event.repository.private == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
+      - name: Decide whether recovery is needed
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != "schedule" ]; then
+            echo "run_check=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          info="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/stock-watch.yml/runs?event=workflow_dispatch&per_page=1")"
+          last="$(printf '%s' "$info" | jq -r '.workflow_runs[0].created_at // empty')"
+          status="$(printf '%s' "$info" | jq -r '.workflow_runs[0].status // empty')"
+          conclusion="$(printf '%s' "$info" | jq -r '.workflow_runs[0].conclusion // empty')"
+
+          if [ -n "$last" ]; then
+            last_epoch="$(date -u -d "$last" +%s)"
+            now_epoch="$(date -u +%s)"
+            age="$((now_epoch - last_epoch))"
+
+            if [ "$age" -lt 900 ] && { [ "$status" = "queued" ] || [ "$status" = "in_progress" ] || [ "$conclusion" = "success" ]; }; then
+              echo "Healthy self-chain detected ($age seconds old); recovery run skipped"
+              echo "run_check=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          echo "No healthy recent self-chain; recovery run will restart monitoring"
+          echo "run_check=true" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
+        if: steps.guard.outputs.run_check == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
+        if: steps.guard.outputs.run_check == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        if: steps.guard.outputs.run_check == 'true'
+        run: pip install --disable-pip-version-check --no-cache-dir -r requirements.txt
 
       - name: Verify notification secret
+        if: steps.guard.outputs.run_check == 'true'
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
@@ -48,11 +78,13 @@ jobs:
           echo "Notification secret is configured"
 
       - name: Check three stores via Jina
+        if: steps.guard.outputs.run_check == 'true'
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python watch.py
 
       - name: Save stock state
+        if: steps.guard.outputs.run_check == 'true'
         run: |
           if git diff --quiet -- state.json; then
             echo "No state change"
@@ -66,10 +98,22 @@ jobs:
           git push
 
       - name: Start next check
+        if: steps.guard.outputs.run_check == 'true' && success()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # The setup/check itself takes some time; 240 s keeps start-to-start
-          # cadence close to five minutes without an external scheduler.
-          sleep 240
-          gh workflow run stock-watch.yml --ref main
+          # Setup + checks take roughly 30 seconds, so 270 seconds keeps
+          # start-to-start cadence close to five minutes.
+          sleep 270
+
+          for attempt in 1 2 3; do
+            if gh workflow run stock-watch.yml --ref main; then
+              echo "Next check dispatched"
+              exit 0
+            fi
+            echo "Dispatch attempt $attempt failed"
+            sleep 10
+          done
+
+          echo "Could not dispatch the next check; hourly recovery will retry later"
+          exit 1
