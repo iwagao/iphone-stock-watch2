@@ -133,7 +133,7 @@ def check_jina(text, target):
     _, prices, pos, neg = best
     if not prices:
         return None, "price not found"
-    price = min(prices)
+    price = choose_price(prices)
 
     if neg:
         return False, f"{neg[0]} / {price:,}円"
@@ -148,13 +148,9 @@ def check_amazon(html):
     soup = BeautifulSoup(html, "html.parser")
     page_text = " ".join(soup.stripped_strings)
 
-    title = soup.select_one("#productTitle")
-    title_text = title.get_text(" ", strip=True) if title else ""
-    if not (
-        MODEL.lower() in title_text.lower()
-        or ("iphone 18 pro max" in title_text.lower() and "256" in title_text.lower() and "black" in title_text.lower())
-    ):
-        return None, "product title not confirmed"
+    # URL is the exact ASIN for the monitored model. Amazon sometimes omits
+    # #productTitle for automated requests, so availability/price/seller are
+    # used as the authoritative checks instead of failing on the title alone.
 
     availability = soup.select_one("#availability")
     availability_text = availability.get_text(" ", strip=True) if availability else ""
@@ -176,7 +172,7 @@ def check_amazon(html):
     prices = extract_prices(price_text or page_text)
     if not prices:
         return None, "price not found"
-    price = min(prices)
+    price = choose_price(prices)
     if price > MAX_PRICE:
         return False, f"{price:,}円 > {MAX_PRICE:,}円"
 
