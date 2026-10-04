@@ -45,7 +45,7 @@ jobs:
           fi
           echo "Notification secret is configured"
 
-      - name: Check four stores via Jina
+      - name: Check three stores via Jina
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python watch.py
