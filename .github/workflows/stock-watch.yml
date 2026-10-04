@@ -77,7 +77,7 @@ jobs:
           fi
           echo "Notification secret is configured"
 
-      - name: Check three stores via Jina
+      - name: Check four stores
         if: steps.guard.outputs.run_check == 'true'
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
