@@ -142,19 +142,10 @@ def fetch_target(target):
         return fetch_amazon(target["check_url"])
 
     if site == "ks":
-        primary = fetch_jina_with_direct_fallback(target["check_url"])
-        if has_inventory_field(primary):
-            return primary
-
-        # K's inventory is dynamically rendered. Try Jina's alternate browser
-        # renderer only when the normal fresh response lacks the official field.
-        try:
-            alternate = fetch_jina(target["check_url"], engine="cf-browser-rendering")
-            if has_inventory_field(alternate):
-                return alternate
-        except Exception:
-            pass
-        return primary
+        # The fresh Reader response is useful for product identity/specs, but
+        # currently does not expose K's dynamic official inventory field.
+        # Do not infer stock from generic legends such as "在庫限り".
+        return fetch_jina_with_direct_fallback(target["check_url"])
 
     if site == "yodobashi":
         try:
@@ -203,9 +194,11 @@ def compact(text):
 
 def product_identity(text, require_jan=False):
     low = text.lower()
-    if "iphone 18 pro max" not in low or "256gb" not in low:
-        return False
-    if MODEL.lower() not in low and require_jan and JAN not in text:
+    if (
+        MODEL.lower() not in low
+        or "iphone 18 pro max" not in low
+        or "256gb" not in low
+    ):
         return False
     if require_jan and JAN not in text:
         return False
