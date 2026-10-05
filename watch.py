@@ -14,6 +14,12 @@ MAX_PRICE = 239800
 NTFY_TOPIC = os.environ["NTFY_TOPIC"]
 STATE_FILE = Path("state.json")
 
+BROWSER_UA = (
+    "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro XL) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/140.0 Mobile Safari/537.36"
+)
+
 TARGETS = [
     {
         "name": "Amazon.co.jp",
@@ -36,15 +42,14 @@ TARGETS = [
     {
         "name": "ヨドバシカメラ",
         "site": "yodobashi",
-        "url": "https://www.yodobashi.com/?word=MJX54J%2FA",
-        "check_url": "https://www.yodobashi.com/?word=MJX54J%2FA",
+        "url": "https://www.yodobashi.com/product/100000001010202098/",
+        "check_url": "https://www.yodobashi.com/product/100000001010202098/",
+        "fallback_url": "https://www.yodobashi.com/?word=MJX54J%2FA",
     },
 ]
 
 
-def fetch_direct(url):
-    # Amazon returns a short bot/interstitial response to requests in some
-    # GitHub-hosted runners. curl over HTTP/1.1 has proven more reliable.
+def fetch_curl(url, timeout=40):
     cmd = [
         "curl",
         "--http1.1",
@@ -52,49 +57,119 @@ def fetch_direct(url):
         "-sS",
         "--fail",
         "--max-time",
-        "40",
+        str(timeout),
         "-A",
-        (
-            "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro XL) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/140.0 Mobile Safari/537.36"
-        ),
+        BROWSER_UA,
         "-H",
         "Accept-Language: ja-JP,ja;q=0.9,en;q=0.8",
         "-H",
         "Cache-Control: no-cache",
         url,
     ]
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5)
     if p.returncode != 0:
-        raise RuntimeError(f"Amazon curl failed: {p.stderr.strip()[:160]}")
+        raise RuntimeError(f"curl failed: {p.stderr.strip()[:160]}")
+    return p.stdout
 
-    text = p.stdout
+
+def fetch_amazon(url):
+    text = fetch_curl(url, timeout=40)
     if len(text) < 100000:
         raise RuntimeError(f"Amazon response too short ({len(text)} bytes)")
     if MODEL.lower() not in text.lower():
         raise RuntimeError("Amazon exact model missing from response")
     return text
 
-def fetch_jina(url):
+
+def fetch_jina(url, engine=None):
+    headers = {
+        "Accept": "text/plain",
+        "User-Agent": "Mozilla/5.0",
+        "X-Locale": "ja-JP",
+        "X-No-Cache": "true",
+        "X-Cache-Tolerance": "0",
+    }
+    if engine:
+        headers["X-Engine"] = engine
+
     r = requests.get(
         "https://r.jina.ai/" + url,
-        headers={
-            "Accept": "text/plain",
-            "User-Agent": "Mozilla/5.0",
-            "X-Locale": "ja-JP",
-            "Cache-Control": "no-cache",
-        },
-        timeout=45,
+        headers=headers,
+        timeout=55,
     )
     r.raise_for_status()
     text = r.text
+
     if len(text.strip()) < 500:
-        raise RuntimeError("Jina response too short")
+        raise RuntimeError(f"Jina response too short ({len(text)} bytes)")
+
     blocked = ["Access Denied", "Just a moment", "アクセスを遮断しました", "CAPTCHA"]
     if any(x.lower() in text.lower() for x in blocked):
         raise RuntimeError("target site blocked Jina")
+
     return text
+
+
+def fetch_jina_with_direct_fallback(url):
+    try:
+        return fetch_jina(url)
+    except Exception as jina_error:
+        try:
+            text = fetch_curl(url, timeout=12)
+            if len(text.strip()) < 500:
+                raise RuntimeError(f"direct response too short ({len(text)} bytes)")
+            return text
+        except Exception as direct_error:
+            raise RuntimeError(
+                f"FETCH_FAIL Jina={jina_error}; direct={direct_error}"
+            ) from direct_error
+
+
+def has_inventory_field(text):
+    return bool(
+        re.search(
+            r"在庫\s*[:：]\s*(?:\|\s*)?"
+            r"(?:販売終了|予約終了|在庫なし|売り切れ|在庫あり|在庫僅少|残りわずか)",
+            re.sub(r"\s+", " ", text),
+        )
+    )
+
+
+def fetch_target(target):
+    site = target["site"]
+
+    if site == "amazon":
+        return fetch_amazon(target["check_url"])
+
+    if site == "ks":
+        primary = fetch_jina_with_direct_fallback(target["check_url"])
+        if has_inventory_field(primary):
+            return primary
+
+        # K's inventory is dynamically rendered. Try Jina's alternate browser
+        # renderer only when the normal fresh response lacks the official field.
+        try:
+            alternate = fetch_jina(target["check_url"], engine="cf-browser-rendering")
+            if has_inventory_field(alternate):
+                return alternate
+        except Exception:
+            pass
+        return primary
+
+    if site == "yodobashi":
+        try:
+            primary = fetch_jina(target["check_url"])
+            low = primary.lower()
+            if MODEL.lower() in low and "iphone 18 pro max" in low:
+                return primary
+        except Exception:
+            pass
+
+        # Exact product page is preferred, but the unique model search page is
+        # a safe fallback because the current query returns exactly one model.
+        return fetch_jina_with_direct_fallback(target["fallback_url"])
+
+    return fetch_jina_with_direct_fallback(target["check_url"])
 
 
 def extract_prices(text):
@@ -122,81 +197,114 @@ def choose_target_price(text):
     return max(affordable) if affordable else min(prices)
 
 
-def product_chunks(text, radius=1400):
-    """Return only blocks where the exact JAN and model occur together."""
-    if JAN not in text or MODEL.lower() not in text.lower():
-        return []
-
-    chunks = []
-    seen = set()
-    for m in re.finditer(re.escape(JAN), text):
-        start = max(0, m.start() - radius)
-        end = min(len(text), m.end() + radius)
-        chunk = text[start:end]
-        if MODEL.lower() not in chunk.lower():
-            continue
-        key = (start, end)
-        if key not in seen:
-            chunks.append(chunk)
-            seen.add(key)
-    return chunks
-
-
 def compact(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
-def price_check(chunk):
-    price = choose_target_price(chunk)
+def product_identity(text, require_jan=False):
+    low = text.lower()
+    if "iphone 18 pro max" not in low or "256gb" not in low:
+        return False
+    if MODEL.lower() not in low and require_jan and JAN not in text:
+        return False
+    if require_jan and JAN not in text:
+        return False
+    return True
+
+
+def best_model_window(text, radius=3500):
+    low = text.lower()
+    positions = [m.start() for m in re.finditer(re.escape(MODEL.lower()), low)]
+    if not positions:
+        return ""
+
+    status_words = [
+        "好評につき売り切れました",
+        "売り切れました",
+        "販売終了しました",
+        "予定数の販売を終了しました",
+        "予定数の販売を終了",
+        "在庫なし",
+        "在庫あり",
+        "在庫残少",
+        "在庫僅少",
+        "残りわずか",
+        "お取り寄せ",
+        "24時間以内に出荷",
+        "カートに入れる",
+    ]
+
+    best = ""
+    best_score = -1
+    for p in positions:
+        w = text[max(0, p - radius): min(len(text), p + radius)]
+        score = 0
+        score += 8 if JAN in w else 0
+        score += 5 if "iPhone 18 Pro Max" in w else 0
+        score += 3 if "256GB" in w else 0
+        score += 3 if "ブラック" in w else 0
+        score += 3 if extract_prices(w) else 0
+        score += sum(4 for x in status_words if x in w)
+        if score > best_score:
+            best_score = score
+            best = w
+
+    return best
+
+
+def price_check(text):
+    price = choose_target_price(text)
     if price is None:
-        return None, "target price not found"
+        return None, "STATUS_UNKNOWN target price not found"
     if price > MAX_PRICE:
         return False, f"{price:,}円 > {MAX_PRICE:,}円"
     return True, f"{price:,}円"
 
 
-def check_yamada(chunks):
-    negative = {
+def check_yamada(text):
+    if not product_identity(text):
+        return None, "PRODUCT_NOT_FOUND Yamada exact product identity missing"
+
+    block = best_model_window(text)
+    if not block:
+        return None, "PRODUCT_NOT_FOUND Yamada model block missing"
+
+    negative = [
         "好評につき売り切れました",
         "売り切れました",
         "販売終了しました",
         "予約開始待ち",
         "予約受付終了",
-    }
-    positive = {
-        "お取り寄せ",
-        "在庫あり",
+    ]
+    for phrase in negative:
+        if phrase in block:
+            return False, f"{phrase} / exact product block"
+
+    positive = [
         "24時間以内に出荷",
-    }
-    status_re = re.compile(
-        r"配送\s*(好評につき売り切れました|売り切れました|販売終了しました|"
-        r"予約開始待ち|予約受付終了|お取り寄せ|在庫あり|24時間以内に出荷)\s*詳細"
-    )
+        "在庫あり",
+        "お取り寄せ",
+    ]
+    stock = next((x for x in positive if x in block), None)
+    if stock:
+        ok, price_reason = price_check(block)
+        if ok is False:
+            return False, price_reason
+        if ok is True and ("数量" in block or "カートに入れる" in block):
+            return True, f"{stock} + purchase control / {price_reason}"
 
-    found_positive = None
-    for chunk in chunks:
-        c = compact(chunk)
-        statuses = status_re.findall(c)
-        for status in statuses:
-            if status in negative:
-                return False, f"{status} / exact product status"
-
-        for status in statuses:
-            if status in positive:
-                ok, price_reason = price_check(chunk)
-                if ok is False:
-                    return False, price_reason
-                if ok is True and ("数量" in chunk or "カートに入れる" in chunk):
-                    found_positive = f"{status} / {price_reason}"
-
-    if found_positive:
-        return True, found_positive
-    return None, "exact Yamada purchase status not confirmed"
+    return None, "STATUS_UNKNOWN Yamada exact purchase status not confirmed"
 
 
-def check_ks(chunks):
-    # K's has a structured inventory field. Only that field is trusted.
-    # Generic legend text such as "在庫限り" is intentionally ignored.
+def check_ks(text):
+    # The exact URL itself contains the JAN. Jina sometimes omits the model
+    # title, so identify the product using JAN + product family/capacity.
+    low = text.lower()
+    if JAN not in text or "iphone 18 pro max" not in low or "256gb" not in low:
+        return None, "PRODUCT_NOT_FOUND K's exact product identity missing"
+
+    c = compact(text)
+
     negative_re = re.compile(
         r"在庫\s*[:：]\s*(?:\|\s*)?"
         r"(販売終了|予約終了|在庫なし|売り切れ)"
@@ -206,30 +314,28 @@ def check_ks(chunks):
         r"(在庫あり|在庫僅少|残りわずか)"
     )
 
-    found_positive = None
-    for chunk in chunks:
-        c = compact(chunk)
+    neg = negative_re.search(c)
+    if neg:
+        return False, f"在庫:{neg.group(1)} / official inventory field"
 
-        neg = negative_re.search(c)
-        if neg:
-            return False, f"在庫:{neg.group(1)} / exact inventory field"
+    pos = positive_re.search(c)
+    if pos:
+        ok, price_reason = price_check(c)
+        if ok is False:
+            return False, price_reason
+        if ok is True:
+            return True, f"在庫:{pos.group(1)} / official inventory field / {price_reason}"
 
-        pos = positive_re.search(c)
-        if pos:
-            ok, price_reason = price_check(chunk)
-            if ok is False:
-                return False, price_reason
-            if ok is True and "数量" in chunk:
-                found_positive = f"在庫:{pos.group(1)} / {price_reason}"
-
-    if found_positive:
-        return True, found_positive
-    return None, "exact K's inventory field not confirmed"
+    # Never use generic legend text such as "在庫限り" as a positive signal.
+    return None, "STATUS_UNKNOWN K's official inventory field not exposed"
 
 
-def check_yodobashi(chunks):
-    # Search/result pages can contain unrelated products, so require:
-    # exact JAN + model, an explicit stock phrase, AND a cart action.
+def check_yodobashi(text):
+    if not product_identity(text):
+        return None, "PRODUCT_NOT_FOUND Yodobashi exact model missing"
+
+    block = best_model_window(text, radius=2800) or text
+
     negative = [
         "予定数の販売を終了しました",
         "予定数の販売を終了",
@@ -237,39 +343,32 @@ def check_yodobashi(chunks):
         "在庫なし",
         "売り切れ",
     ]
-    stock_positive = [
+    for phrase in negative:
+        if phrase in block:
+            return False, f"{phrase} / exact model block"
+
+    ok, price_reason = price_check(block)
+    if ok is False:
+        return False, price_reason
+
+    positive = [
         "在庫あり",
         "在庫残少",
         "在庫僅少",
         "残りわずか",
         "お取り寄せ",
     ]
+    stock = next((x for x in positive if x in block), None)
+    if stock and "カートに入れる" in block and ok is True:
+        return True, f"{stock} + カートに入れる / {price_reason}"
 
-    found_positive = None
-    for chunk in chunks:
-        if any(x in chunk for x in negative):
-            hit = next(x for x in negative if x in chunk)
-            return False, f"{hit} / exact product block"
-
-        stock = next((x for x in stock_positive if x in chunk), None)
-        if stock and "カートに入れる" in chunk:
-            ok, price_reason = price_check(chunk)
-            if ok is False:
-                return False, price_reason
-            if ok is True:
-                found_positive = f"{stock} + カートに入れる / {price_reason}"
-
-    if found_positive:
-        return True, found_positive
-    return None, "Yodobashi requires stock phrase + cart action"
+    return None, "STATUS_UNKNOWN Yodobashi stock + cart action not confirmed"
 
 
 def check_amazon(html):
-    # Exact ASIN URL + exact model string are both required.
     if MODEL.lower() not in html.lower():
-        return None, "exact Amazon model not confirmed"
+        return None, "PRODUCT_NOT_FOUND Amazon exact model missing"
 
-    # Only inspect the product availability area for a negative state.
     availability_pos = html.lower().find('id="availability"')
     availability_block = ""
     if availability_pos >= 0:
@@ -284,19 +383,18 @@ def check_amazon(html):
         if phrase in availability_block or phrase in html:
             return False, f"{phrase} / exact Amazon product"
 
-    # A positive result is deliberately strict:
-    # purchase button + Amazon seller + target price <= MAX_PRICE.
     has_cart = (
         'id="add-to-cart-button"' in html
         or 'id="buy-now-button"' in html
         or 'name="submit.add-to-cart"' in html
     )
     if not has_cart:
-        return False, "Amazon purchase button not found"
+        return None, "STATUS_UNKNOWN Amazon purchase button not found"
 
     merchant_pos = html.lower().find('id="merchant-info"')
     if merchant_pos < 0:
-        return None, "Amazon merchant field not found"
+        return None, "STATUS_UNKNOWN Amazon merchant field not found"
+
     merchant_block = html[merchant_pos:merchant_pos + 10000]
     if "Amazon.co.jp" not in merchant_block:
         return False, "seller is not Amazon.co.jp"
@@ -313,7 +411,7 @@ def check_amazon(html):
 
     price = choose_target_price(price_block)
     if price is None:
-        return None, "Amazon target price not confirmed"
+        return None, "STATUS_UNKNOWN Amazon target price not confirmed"
     if price > MAX_PRICE:
         return False, f"{price:,}円 > {MAX_PRICE:,}円"
 
@@ -321,20 +419,16 @@ def check_amazon(html):
 
 
 def check_target(text, target):
-    if target["site"] == "amazon":
+    site = target["site"]
+    if site == "amazon":
         return check_amazon(text)
-
-    chunks = product_chunks(text)
-    if not chunks:
-        return None, "exact MODEL + JAN product block not found"
-
-    if target["site"] == "yamada":
-        return check_yamada(chunks)
-    if target["site"] == "ks":
-        return check_ks(chunks)
-    if target["site"] == "yodobashi":
-        return check_yodobashi(chunks)
-    return None, "unknown site parser"
+    if site == "yamada":
+        return check_yamada(text)
+    if site == "ks":
+        return check_ks(text)
+    if site == "yodobashi":
+        return check_yodobashi(text)
+    return None, "STATUS_UNKNOWN unknown site parser"
 
 
 def load_state():
@@ -400,23 +494,29 @@ def main():
         before = bool(state.get(name, False))
 
         try:
-            fetcher = fetch_direct if target["site"] == "amazon" else fetch_jina
-            available, reason = check_target(fetcher(target["check_url"]), target)
+            text = fetch_target(target)
+            available, reason = check_target(text, target)
 
-            # False positives are costlier than missed alerts. A positive result
-            # must therefore be reproduced by a second independent fetch.
+            # A positive result must be reproduced by a second fresh fetch.
             if available is True:
                 time.sleep(3)
-                confirm, confirm_reason = check_target(
-                    fetcher(target["check_url"]), target
-                )
+                confirm_text = fetch_target(target)
+                confirm, confirm_reason = check_target(confirm_text, target)
+
                 if confirm is not True:
                     available = None
-                    reason = f"positive not confirmed twice; second={confirm_reason}"
+                    reason = (
+                        "STATUS_UNKNOWN positive not confirmed twice; "
+                        f"second={confirm_reason}"
+                    )
                 else:
                     reason = f"{reason} / confirmed twice"
 
-            status = "UNKNOWN" if available is None else ("IN STOCK" if available else "OUT")
+            status = (
+                "UNKNOWN"
+                if available is None
+                else ("IN STOCK" if available else "OUT")
+            )
             print(f"{name}: {status} ({reason})")
 
             if available is True and not before:
@@ -426,7 +526,7 @@ def main():
                 state[name] = available
 
         except Exception as e:
-            print(f"{name}: UNKNOWN ({e})", file=sys.stderr)
+            print(f"{name}: UNKNOWN (FETCH_FAIL {e})", file=sys.stderr)
 
     save_state(state)
 
