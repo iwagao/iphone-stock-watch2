@@ -11,28 +11,24 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 8
     steps:
-      - name: Find Yodobashi target product
-        shell: bash
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --disable-pip-version-check --no-cache-dir -r requirements.txt
+      - name: Test improved parsers
+        env:
+          NTFY_TOPIC: test-only
         run: |
-          set -e
-          curl --http1.1 -L -sS --max-time 55 \
-            -A "Mozilla/5.0" \
-            -H "Accept: text/plain" \
-            -H "X-No-Cache: true" \
-            -H "X-Cache-Tolerance: 0" \
-            -o page.txt "https://r.jina.ai/https://www.yodobashi.com/?word=MJX54J%2FA"
           python - <<'PY'
-          import re
-          t=open('page.txt',encoding='utf-8',errors='ignore').read()
-          low=t.lower()
-          for m in re.finditer('mjx54j/a',low):
-              s=max(0,m.start()-1800); e=min(len(t),m.end()+2200)
-              w=t[s:e]
-              links=re.findall(r'https://www\.yodobashi\.com/product/[0-9]+/',w)
-              if links:
-                  print("MODEL_POS",m.start())
-                  print("LINKS",list(dict.fromkeys(links)))
-                  print("SNIP",re.sub(r'\s+',' ',w)[:3800])
+          import watch
+          for target in watch.TARGETS:
+              try:
+                  text = watch.fetch_target(target)
+                  result = watch.check_target(text, target)
+                  print(target["name"], result)
+              except Exception as e:
+                  print(target["name"], "EXCEPTION", repr(e))
           PY
