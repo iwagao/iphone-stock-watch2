@@ -10,107 +10,152 @@ permissions:
 
 jobs:
   test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - color: バーガンディ
+            model: MJX74J/A
+            jan: "4549995734645"
+            asin: B0HJB6YR8X
+            yamada: "https://www.yamada-denkiweb.com/7164955016/"
+            store: amazon
+          - color: バーガンディ
+            model: MJX74J/A
+            jan: "4549995734645"
+            asin: B0HJB6YR8X
+            yamada: "https://www.yamada-denkiweb.com/7164955016/"
+            store: yamada
+          - color: バーガンディ
+            model: MJX74J/A
+            jan: "4549995734645"
+            asin: B0HJB6YR8X
+            yamada: "https://www.yamada-denkiweb.com/7164955016/"
+            store: ks
+          - color: バーガンディ
+            model: MJX74J/A
+            jan: "4549995734645"
+            asin: B0HJB6YR8X
+            yamada: "https://www.yamada-denkiweb.com/7164955016/"
+            store: yodobashi
+
+          - color: グレイシャー
+            model: MJX84J/A
+            jan: "4549995734690"
+            asin: B0HJB7L347
+            yamada: "https://www.yamada-denkiweb.com/7164956013/"
+            store: amazon
+          - color: グレイシャー
+            model: MJX84J/A
+            jan: "4549995734690"
+            asin: B0HJB7L347
+            yamada: "https://www.yamada-denkiweb.com/7164956013/"
+            store: yamada
+          - color: グレイシャー
+            model: MJX84J/A
+            jan: "4549995734690"
+            asin: B0HJB7L347
+            yamada: "https://www.yamada-denkiweb.com/7164956013/"
+            store: ks
+          - color: グレイシャー
+            model: MJX84J/A
+            jan: "4549995734690"
+            asin: B0HJB7L347
+            yamada: "https://www.yamada-denkiweb.com/7164956013/"
+            store: yodobashi
+
+          - color: シルバー
+            model: MJX64J/A
+            jan: "4549995734591"
+            asin: B0HJBCT1D5
+            yamada: "https://www.yamada-denkiweb.com/7164954019/"
+            store: amazon
+          - color: シルバー
+            model: MJX64J/A
+            jan: "4549995734591"
+            asin: B0HJBCT1D5
+            yamada: "https://www.yamada-denkiweb.com/7164954019/"
+            store: yamada
+          - color: シルバー
+            model: MJX64J/A
+            jan: "4549995734591"
+            asin: B0HJBCT1D5
+            yamada: "https://www.yamada-denkiweb.com/7164954019/"
+            store: ks
+          - color: シルバー
+            model: MJX64J/A
+            jan: "4549995734591"
+            asin: B0HJBCT1D5
+            yamada: "https://www.yamada-denkiweb.com/7164954019/"
+            store: yodobashi
+
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 8
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install --disable-pip-version-check --no-cache-dir -r requirements.txt
-      - name: Test three non-black colors
+      - name: Test one color/store
         env:
           NTFY_TOPIC: test-only
+          COLOR: ${{ matrix.color }}
+          MODEL: ${{ matrix.model }}
+          JAN: ${{ matrix.jan }}
+          ASIN: ${{ matrix.asin }}
+          YAMADA: ${{ matrix.yamada }}
+          STORE: ${{ matrix.store }}
         run: |
           python - <<'PY'
-          import re
+          import os,re
           import watch
 
-          COLORS = [
-              {
-                  "color": "バーガンディ",
-                  "model": "MJX74J/A",
-                  "jan": "4549995734645",
-                  "asin": "B0HJB6YR8X",
-                  "yamada": "https://www.yamada-denkiweb.com/7164955016/",
-              },
-              {
-                  "color": "グレイシャー",
-                  "model": "MJX84J/A",
-                  "jan": "4549995734690",
-                  "asin": "B0HJB7L347",
-                  "yamada": "https://www.yamada-denkiweb.com/7164956013/",
-              },
-              {
-                  "color": "シルバー",
-                  "model": "MJX64J/A",
-                  "jan": "4549995734591",
-                  "asin": "B0HJBCT1D5",
-                  "yamada": "https://www.yamada-denkiweb.com/7164954019/",
-              },
-          ]
+          color=os.environ["COLOR"]
+          model=os.environ["MODEL"]
+          jan=os.environ["JAN"]
+          asin=os.environ["ASIN"]
+          yamada=os.environ["YAMADA"]
+          store=os.environ["STORE"]
 
-          def yodobashi_product(model):
-              search = f"https://www.yodobashi.com/?word={model.replace('/', '%2FA')}"
-              text = watch.fetch_jina(search)
-              esc = re.escape(model)
-              m = re.search(
-                  rf"\[[^\]]*{esc}[^\]]*\]\((https://www\.yodobashi\.com/product/[0-9]+/)\)",
-                  text,
-                  re.I,
-              )
-              if not m:
-                  # Accept image/title markdown around the model, then choose
-                  # the nearest product URL in the same result block.
-                  p = text.lower().find(model.lower())
-                  if p >= 0:
-                      window = text[max(0, p-2500):p+2500]
-                      links = re.findall(r"https://www\.yodobashi\.com/product/[0-9]+/", window)
-                      if links:
-                          return links[-1], search
-                  return search, search
-              return m.group(1), search
+          watch.MODEL=model
+          watch.JAN=jan
 
-          for item in COLORS:
-              watch.MODEL = item["model"]
-              watch.JAN = item["jan"]
-              print(f"=== COLOR {item['color']} / {item['model']} / {item['jan']} ===")
+          if store=="amazon":
+              target={
+                  "name":"Amazon.co.jp","site":"amazon",
+                  "url":f"https://www.amazon.co.jp/dp/{asin}",
+                  "check_url":f"https://www.amazon.co.jp/dp/{asin}",
+              }
+          elif store=="yamada":
+              target={
+                  "name":"ヤマダウェブコム","site":"yamada",
+                  "url":yamada,"check_url":yamada,
+              }
+          elif store=="ks":
+              url=f"https://www.ksdenki.com/shop/g/g{jan}/"
+              target={"name":"ケーズデンキ","site":"ks","url":url,"check_url":url}
+          else:
+              search=f"https://www.yodobashi.com/?word={model.replace('/', '%2FA')}"
+              search_text=watch.fetch_jina(search)
+              p=search_text.lower().find(model.lower())
+              url=search
+              if p>=0:
+                  w=search_text[max(0,p-2200):p+2600]
+                  links=re.findall(r"https://www\.yodobashi\.com/product/[0-9]+/",w)
+                  if links:
+                      url=links[-1]
+              target={
+                  "name":"ヨドバシカメラ","site":"yodobashi",
+                  "url":url,"check_url":url,"fallback_url":search,
+              }
+              print("YODO_URL",url)
 
-              yodo_url, yodo_search = yodobashi_product(item["model"])
-              targets = [
-                  {
-                      "name": "Amazon.co.jp",
-                      "site": "amazon",
-                      "url": f"https://www.amazon.co.jp/dp/{item['asin']}",
-                      "check_url": f"https://www.amazon.co.jp/dp/{item['asin']}",
-                  },
-                  {
-                      "name": "ヤマダウェブコム",
-                      "site": "yamada",
-                      "url": item["yamada"],
-                      "check_url": item["yamada"],
-                  },
-                  {
-                      "name": "ケーズデンキ",
-                      "site": "ks",
-                      "url": f"https://www.ksdenki.com/shop/g/g{item['jan']}/",
-                      "check_url": f"https://www.ksdenki.com/shop/g/g{item['jan']}/",
-                  },
-                  {
-                      "name": "ヨドバシカメラ",
-                      "site": "yodobashi",
-                      "url": yodo_url,
-                      "check_url": yodo_url,
-                      "fallback_url": yodo_search,
-                  },
-              ]
-
-              print("YODO_URL", yodo_url)
-              for target in targets:
-                  try:
-                      text = watch.fetch_target(target)
-                      result = watch.check_target(text, target)
-                      print(f"{item['color']} | {target['name']} | {result}")
-                  except Exception as e:
-                      print(f"{item['color']} | {target['name']} | EXCEPTION {type(e).__name__}: {e}")
+          try:
+              text=watch.fetch_target(target)
+              result=watch.check_target(text,target)
+              print(f"RESULT | {color} | {model} | {target['name']} | {result}")
+          except Exception as e:
+              print(f"RESULT | {color} | {model} | {target['name']} | EXCEPTION {type(e).__name__}: {e}")
           PY
