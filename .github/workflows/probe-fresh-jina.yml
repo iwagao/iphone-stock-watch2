@@ -1,0 +1,55 @@
+name: Probe Fresh Jina
+
+on:
+  push:
+    paths:
+      - ".github/workflows/probe-fresh-jina.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Probe fresh Jina content
+        shell: bash
+        run: |
+          set +e
+          urls=(
+            "ヤマダ|https://www.yamada-denkiweb.com/7164953012/"
+            "ケーズ|https://www.ksdenki.com/shop/g/g4549995734546/"
+            "ヨドバシ|https://www.yodobashi.com/?word=MJX54J%2FA"
+          )
+          for item in "${urls[@]}"; do
+            name="${item%%|*}"; url="${item#*|}"
+            echo "=== $name ==="
+            rm -f fresh.txt
+            code=$(curl --http1.1 -L -sS --max-time 55 \
+              -A "Mozilla/5.0" \
+              -H "Accept: text/plain" \
+              -H "X-No-Cache: true" \
+              -H "X-Cache-Tolerance: 0" \
+              -o fresh.txt -w "%{http_code}" "https://r.jina.ai/$url")
+            python - "$name" "$code" <<'PY'
+          import sys,re
+          name,code=sys.argv[1:3]
+          t=open('fresh.txt','r',encoding='utf-8',errors='ignore').read() if __import__('os').path.exists('fresh.txt') else ''
+          print("http",code,"bytes",len(t))
+          for key in ['MJX54J/A','4549995734546','在庫:販売終了','在庫：  | 販売終了','販売終了','好評につき売り切れました','在庫あり','カートに入れる','239,800円']:
+              print(key, t.count(key))
+          if name=='ヨドバシ':
+              links=re.findall(r'\[[^\]]*MJX54J/A[^\]]*\]\((https://www\.yodobashi\.com/product/[^)]+)\)',t,re.I)
+              if not links:
+                  links=re.findall(r'(https://www\.yodobashi\.com/product/[^)\s]+)',t)
+              print("PRODUCT_LINKS", list(dict.fromkeys(links))[:10])
+              p=t.lower().find('mjx54j/a')
+              print("MODEL_SNIP",re.sub(r'\s+',' ',t[max(0,p-1200):p+4500])[:5600] if p>=0 else '')
+          else:
+              for patt in ['在庫','配送','販売終了','好評につき売り切れました','カートに入れる']:
+                  p=t.find(patt)
+                  if p>=0:
+                      print(patt+"_SNIP",re.sub(r'\s+',' ',t[max(0,p-700):p+1800])[:2500])
+          PY
+          done
