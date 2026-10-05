@@ -1,0 +1,62 @@
+name: Probe Current Store Pages
+
+on:
+  push:
+    paths:
+      - ".github/workflows/probe-current-pages.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Inspect current store responses
+        shell: bash
+        run: |
+          set +e
+          ua="Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36"
+          urls=(
+            "ヤマダ|https://www.yamada-denkiweb.com/7164953012/"
+            "ケーズ|https://www.ksdenki.com/shop/g/g4549995734546/"
+            "ヨドバシ|https://www.yodobashi.com/?word=MJX54J%2FA"
+          )
+          for item in "${urls[@]}"; do
+            name="${item%%|*}"; url="${item#*|}"
+            echo "=== $name ==="
+
+            rm -f jina.txt direct.txt
+            jcode=$(curl --http1.1 -L -sS --max-time 45 -A "Mozilla/5.0" -H "Accept: text/plain" -o jina.txt -w "%{http_code}" "https://r.jina.ai/$url")
+            dcode=$(curl --http1.1 -L -sS --max-time 40 -A "$ua" -H "Accept-Language: ja-JP,ja;q=0.9" -o direct.txt -w "%{http_code}" "$url")
+
+            python - "$name" "$jcode" "$dcode" <<'PY'
+          import sys,re
+          name,jcode,dcode=sys.argv[1:4]
+          def read(path):
+              try:
+                  return open(path,'r',encoding='utf-8',errors='ignore').read()
+              except:
+                  return ''
+          def summarize(label,t,code):
+              low=t.lower()
+              model=low.find('mjx54j/a')
+              jan=t.find('4549995734546')
+              dist=abs(model-jan) if model>=0 and jan>=0 else None
+              phrases=[
+                  '販売終了','予約終了','在庫なし','売り切れ','好評につき売り切れました',
+                  '在庫あり','在庫限り','在庫残少','お取り寄せ','カートに入れる',
+                  '24時間以内に出荷','数量'
+              ]
+              hits={p:t.count(p) for p in phrases if p in t}
+              print(f"{label} http={code} bytes={len(t)} model={model} jan={jan} distance={dist} hits={hits}")
+              anchors=[x for x in [model,jan] if x>=0]
+              if anchors:
+                  p=min(anchors)
+                  sn=re.sub(r'\s+',' ',t[max(0,p-500):p+1500])
+                  print(label+"_SNIP="+sn[:1800])
+          summarize('JINA',read('jina.txt'),jcode)
+          summarize('DIRECT',read('direct.txt'),dcode)
+          PY
+          done
