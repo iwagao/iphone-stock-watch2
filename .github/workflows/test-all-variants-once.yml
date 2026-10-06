@@ -1,0 +1,219 @@
+name: Test All iPhone 18 Pro Max Variants Once
+
+on:
+  push:
+    paths:
+      - ".github/workflows/test-all-variants-once.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --disable-pip-version-check --no-cache-dir -r requirements.txt
+      - name: Scan all colors and capacities once
+        env:
+          NTFY_TOPIC: test-only
+        run: |
+          python - <<'PY'
+          import concurrent.futures
+          import re
+          from urllib.parse import quote
+
+          import watch
+
+          SKUS = [
+              ("256GB","ブラック","MJX54J/A","4549995734546"),
+              ("256GB","シルバー","MJX64J/A","4549995734591"),
+              ("256GB","バーガンディ","MJX74J/A","4549995734645"),
+              ("256GB","グレイシャー","MJX84J/A","4549995734690"),
+              ("512GB","ブラック","MJX94J/A","4549995734744"),
+              ("512GB","シルバー","MJXA4J/A","4549995734799"),
+              ("512GB","バーガンディ","MJXC4J/A","4549995734843"),
+              ("512GB","グレイシャー","MJXD4J/A","4549995734898"),
+              ("1TB","ブラック","MJXE4J/A","4549995734942"),
+              ("1TB","シルバー","MJXF4J/A","4549995734997"),
+              ("1TB","バーガンディ","MJXG4J/A","4549995735048"),
+              ("1TB","グレイシャー","MJXH4J/A","4549995735093"),
+              ("2TB","ブラック","MJXJ4J/A","4549995735147"),
+              ("2TB","シルバー","MJXK4J/A","4549995735192"),
+              ("2TB","バーガンディ","MJXL4J/A","4549995735246"),
+              ("2TB","グレイシャー","MJXM4J/A","4549995735291"),
+          ]
+
+          NEG_YAMADA = [
+              "好評につき売り切れました","売り切れました","販売終了しました",
+              "予約開始待ち","予約受付終了",
+          ]
+          POS_YAMADA = ["お取り寄せ","在庫あり","24時間以内に出荷"]
+
+          NEG_YODO = [
+              "予定数の販売を終了しました","予定数の販売を終了",
+              "販売終了","在庫なし","売り切れ",
+          ]
+          POS_YODO = ["在庫あり","在庫残少","在庫僅少","残りわずか","お取り寄せ"]
+
+          def window(text, model, radius=5000):
+              p=text.lower().find(model.lower())
+              if p < 0:
+                  return ""
+              return text[max(0,p-radius):min(len(text),p+radius)]
+
+          def find_nearest(pattern, text, model):
+              p=text.lower().find(model.lower())
+              if p < 0:
+                  return None
+              w=text[max(0,p-5000):min(len(text),p+5000)]
+              vals=re.findall(pattern,w,re.I)
+              return vals[-1] if vals else None
+
+          def check_yamada(sku):
+              cap,color,model,jan=sku
+              try:
+                  search=f"https://www.yamada-denkiweb.com/search/{quote(model, safe='')}/"
+                  s=watch.fetch_jina(search)
+                  url=find_nearest(r"https://www\.yamada-denkiweb\.com/([0-9]+)/",s,model)
+                  if url:
+                      page_url=f"https://www.yamada-denkiweb.com/{url}/"
+                      t=watch.fetch_jina(page_url)
+                  else:
+                      page_url=search
+                      t=s
+                  b=window(t,model)
+                  if not b or "iphone 18 pro max" not in b.lower() or cap.lower() not in b.lower():
+                      return ("UNKNOWN","PRODUCT_NOT_FOUND",page_url)
+                  for x in NEG_YAMADA:
+                      if x in b:
+                          return ("OUT",x,page_url)
+                  pos=next((x for x in POS_YAMADA if x in b),None)
+                  if pos and ("数量" in b or "カートに入れる" in b):
+                      return ("IN STOCK",pos,page_url)
+                  if pos and page_url == search:
+                      return ("POSSIBLE",pos+" on search result",page_url)
+                  return ("UNKNOWN","STATUS_UNKNOWN",page_url)
+              except Exception as e:
+                  return ("UNKNOWN","FETCH_FAIL "+str(e)[:180],None)
+
+          def check_yodobashi(sku):
+              cap,color,model,jan=sku
+              try:
+                  search=f"https://www.yodobashi.com/?word={quote(model, safe='')}"
+                  s=watch.fetch_jina(search)
+                  url=find_nearest(r"(https://www\.yodobashi\.com/product/[0-9]+/)",s,model)
+                  t=watch.fetch_jina(url) if url else s
+                  b=window(t,model)
+                  if not b or "iphone 18 pro max" not in b.lower() or cap.lower() not in b.lower():
+                      return ("UNKNOWN","PRODUCT_NOT_FOUND",url or search)
+                  for x in NEG_YODO:
+                      if x in b:
+                          return ("OUT",x,url or search)
+                  pos=next((x for x in POS_YODO if x in b),None)
+                  if pos and "カートに入れる" in b:
+                      return ("IN STOCK",pos,url or search)
+                  return ("UNKNOWN","STATUS_UNKNOWN",url or search)
+              except Exception as e:
+                  return ("UNKNOWN","FETCH_FAIL "+str(e)[:180],None)
+
+          def check_ks(sku):
+              cap,color,model,jan=sku
+              try:
+                  url=f"https://www.ksdenki.com/shop/g/g{jan}/"
+                  t=watch.fetch_jina(url)
+                  low=t.lower()
+                  if jan not in t or cap.lower() not in low:
+                      return ("UNKNOWN","PRODUCT_NOT_FOUND",url)
+                  c=re.sub(r"\s+"," ",t)
+                  m=re.search(r"在庫\s*[:：]\s*(?:\|\s*)?(販売終了|予約終了|在庫なし|売り切れ)",c)
+                  if m:
+                      return ("OUT","在庫:"+m.group(1),url)
+                  m=re.search(r"在庫\s*[:：]\s*(?:\|\s*)?(在庫あり|在庫僅少|残りわずか)",c)
+                  if m:
+                      return ("IN STOCK","在庫:"+m.group(1),url)
+                  return ("UNKNOWN","official inventory field not exposed",url)
+              except Exception as e:
+                  return ("UNKNOWN","FETCH_FAIL "+str(e)[:180],None)
+
+          def amazon_asin(search_html, model):
+              p=search_html.lower().find(model.lower())
+              if p < 0:
+                  return None
+              before=search_html[max(0,p-15000):p+2500]
+              vals=[x for x in re.findall(r'data-asin="([A-Z0-9]{10})"',before) if x]
+              return vals[-1] if vals else None
+
+          def check_amazon(sku):
+              cap,color,model,jan=sku
+              try:
+                  search=f"https://www.amazon.co.jp/s?k={quote(model, safe='')}"
+                  s=watch.fetch_curl(search,timeout=35)
+                  asin=amazon_asin(s,model)
+                  if not asin:
+                      return ("UNKNOWN","ASIN_NOT_FOUND",search)
+                  url=f"https://www.amazon.co.jp/dp/{asin}"
+                  t=watch.fetch_curl(url,timeout=35)
+                  if model.lower() not in t.lower():
+                      return ("UNKNOWN","PRODUCT_NOT_FOUND",url)
+                  avp=t.lower().find('id="availability"')
+                  av=t[avp:avp+12000] if avp>=0 else t
+                  for x in ["現在在庫切れです","一時的に在庫切れ","現在お取り扱いできません"]:
+                      if x in av:
+                          return ("OUT",x,url)
+                  has_cart=(
+                      'id="add-to-cart-button"' in t
+                      or 'id="buy-now-button"' in t
+                      or 'name="submit.add-to-cart"' in t
+                  )
+                  mp=t.lower().find('id="merchant-info"')
+                  merchant=t[mp:mp+10000] if mp>=0 else ""
+                  if has_cart and "Amazon.co.jp" in merchant:
+                      return ("IN STOCK","Amazon.co.jp + purchase button",url)
+                  return ("UNKNOWN","STATUS_UNKNOWN",url)
+              except Exception as e:
+                  return ("UNKNOWN","FETCH_FAIL "+str(e)[:180],None)
+
+          CHECKERS = {
+              "Amazon.co.jp": check_amazon,
+              "ヤマダウェブコム": check_yamada,
+              "ケーズデンキ": check_ks,
+              "ヨドバシカメラ": check_yodobashi,
+          }
+
+          tasks=[]
+          for store,fn in CHECKERS.items():
+              for sku in SKUS:
+                  tasks.append((store,fn,sku))
+
+          results=[]
+          with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+              futs={ex.submit(fn,sku):(store,sku) for store,fn,sku in tasks}
+              for fut in concurrent.futures.as_completed(futs):
+                  store,sku=futs[fut]
+                  cap,color,model,jan=sku
+                  try:
+                      status,reason,url=fut.result()
+                  except Exception as e:
+                      status,reason,url="UNKNOWN","UNHANDLED "+repr(e),None
+                  results.append((status,store,cap,color,model,reason,url))
+                  print(f"RESULT | {status} | {store} | {cap} | {color} | {model} | {reason} | {url or ''}")
+
+          print("=== SUMMARY ===")
+          for status in ["IN STOCK","POSSIBLE","OUT","UNKNOWN"]:
+              rows=[r for r in results if r[0]==status]
+              print(status, len(rows))
+              for r in sorted(rows,key=lambda x:(x[1],x[2],x[3])):
+                  print("SUMMARY", " | ".join(str(x or "") for x in r[:6]))
+
+          if any(r[0]=="IN STOCK" for r in results):
+              print("ANY_STOCK=YES")
+          elif any(r[0]=="POSSIBLE" for r in results):
+              print("ANY_STOCK=POSSIBLE")
+          else:
+              print("ANY_STOCK=NO_CONFIRMED")
+          PY
