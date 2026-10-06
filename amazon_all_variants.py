@@ -37,7 +37,6 @@ def fetch(url, timeout=45):
     cmd = [
         "curl",
         "--http1.1",
-        "--compressed",
         "-L",
         "-sS",
         "--fail",
