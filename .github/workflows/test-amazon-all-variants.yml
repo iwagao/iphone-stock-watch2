@@ -10,204 +10,176 @@ permissions:
 
 jobs:
   test:
-    strategy:
-      fail-fast: false
-      max-parallel: 4
-      matrix:
-        include:
-          - capacity: 256GB
-            color: ブラック
-            model: MJX54J/A
-          - capacity: 256GB
-            color: シルバー
-            model: MJX64J/A
-          - capacity: 256GB
-            color: バーガンディ
-            model: MJX74J/A
-          - capacity: 256GB
-            color: グレイシャー
-            model: MJX84J/A
-          - capacity: 512GB
-            color: ブラック
-            model: MJX94J/A
-          - capacity: 512GB
-            color: シルバー
-            model: MJXA4J/A
-          - capacity: 512GB
-            color: バーガンディ
-            model: MJXC4J/A
-          - capacity: 512GB
-            color: グレイシャー
-            model: MJXD4J/A
-          - capacity: 1TB
-            color: ブラック
-            model: MJXE4J/A
-          - capacity: 1TB
-            color: シルバー
-            model: MJXF4J/A
-          - capacity: 1TB
-            color: バーガンディ
-            model: MJXG4J/A
-          - capacity: 1TB
-            color: グレイシャー
-            model: MJXH4J/A
-          - capacity: 2TB
-            color: ブラック
-            model: MJXJ4J/A
-          - capacity: 2TB
-            color: シルバー
-            model: MJXK4J/A
-          - capacity: 2TB
-            color: バーガンディ
-            model: MJXL4J/A
-          - capacity: 2TB
-            color: グレイシャー
-            model: MJXM4J/A
-
     runs-on: ubuntu-latest
-    timeout-minutes: 8
-
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install --disable-pip-version-check --no-cache-dir -r requirements.txt
-      - name: Check one Amazon SKU
+      - name: Extract variant ASINs and check directly
         env:
           NTFY_TOPIC: test-only
-          CAPACITY: ${{ matrix.capacity }}
-          COLOR: ${{ matrix.color }}
-          MODEL: ${{ matrix.model }}
         run: |
           python - <<'PY'
-          import os
+          import json
           import re
           import subprocess
-          from urllib.parse import quote
+          import time
 
           import watch
 
-          capacity = os.environ["CAPACITY"]
-          color = os.environ["COLOR"]
-          model = os.environ["MODEL"]
+          SKUS = [
+              ("256GB","ブラック","MJX54J/A"),
+              ("256GB","シルバー","MJX64J/A"),
+              ("256GB","バーガンディ","MJX74J/A"),
+              ("256GB","グレイシャー","MJX84J/A"),
+              ("512GB","ブラック","MJX94J/A"),
+              ("512GB","シルバー","MJXA4J/A"),
+              ("512GB","バーガンディ","MJXC4J/A"),
+              ("512GB","グレイシャー","MJXD4J/A"),
+              ("1TB","ブラック","MJXE4J/A"),
+              ("1TB","シルバー","MJXF4J/A"),
+              ("1TB","バーガンディ","MJXG4J/A"),
+              ("1TB","グレイシャー","MJXH4J/A"),
+              ("2TB","ブラック","MJXJ4J/A"),
+              ("2TB","シルバー","MJXK4J/A"),
+              ("2TB","バーガンディ","MJXL4J/A"),
+              ("2TB","グレイシャー","MJXM4J/A"),
+          ]
 
           def curl(url, timeout=40):
               cmd = [
-                  "curl", "--http1.1", "--compressed", "-L", "-sS", "--fail",
-                  "--max-time", str(timeout),
-                  "-A", watch.BROWSER_UA,
-                  "-H", "Accept-Language: ja-JP,ja;q=0.9,en;q=0.8",
-                  "-H", "Cache-Control: no-cache",
+                  "curl","--http1.1","--compressed","-L","-sS","--fail",
+                  "--max-time",str(timeout),
+                  "-A",watch.BROWSER_UA,
+                  "-H","Accept-Language: ja-JP,ja;q=0.9,en;q=0.8",
+                  "-H","Cache-Control: no-cache",
                   url,
               ]
-              p = subprocess.run(cmd, capture_output=True, timeout=timeout + 5)
+              p=subprocess.run(cmd,capture_output=True,timeout=timeout+5)
               if p.returncode != 0:
-                  err = p.stderr.decode("utf-8", "ignore").strip()
+                  err=p.stderr.decode("utf-8","ignore").strip()
                   raise RuntimeError(f"curl rc={p.returncode}: {err[:180]}")
-              return p.stdout.decode("utf-8", "ignore")
+              return p.stdout.decode("utf-8","ignore")
 
-          def candidate_asins(html):
-              low = html.lower()
-              pos = [m.start() for m in re.finditer(re.escape(model.lower()), low)]
-              found = []
-              for p in pos:
-                  start = max(0, p - 18000)
-                  end = min(len(html), p + 5000)
-                  w = html[start:end]
+          base_asin="B0HJ9ZYXPV"
+          base=curl(f"https://www.amazon.co.jp/dp/{base_asin}",45)
+          print("BASE_BYTES",len(base))
+
+          # Pull ASIN -> displayed variation values from Amazon's embedded data.
+          asin_to_vals={}
+          patterns=[
+              r'"dimensionValuesDisplayData"\s*:\s*(\{.*?\})\s*,\s*"variationValues"',
+              r'"dimensionValuesDisplayData"\s*:\s*(\{.*?\})\s*,\s*"dimensionValues"',
+          ]
+          for pat in patterns:
+              m=re.search(pat,base,re.S)
+              if m:
+                  raw=m.group(1)
+                  try:
+                      obj=json.loads(raw)
+                      for asin,vals in obj.items():
+                          asin_to_vals[asin]=vals
+                  except Exception as e:
+                      print("DIMENSION_JSON_FAIL",repr(e))
+                  break
+
+          # Fallback: model-adjacent ASIN discovery.
+          model_to_asin={}
+          for cap,color,model in SKUS:
+              positions=[m.start() for m in re.finditer(re.escape(model),base,re.I)]
+              candidates=[]
+              for p in positions:
+                  w=base[max(0,p-12000):min(len(base),p+12000)]
                   for pat in [
-                      r'data-asin="([A-Z0-9]{10})"',
+                      r'"asin"\s*:\s*"([A-Z0-9]{10})"',
+                      r'"([A-Z0-9]{10})"\s*:\s*\[[^\]]*(?:256GB|512GB|1TB|2TB)',
                       r'/dp/([A-Z0-9]{10})',
-                      r'/gp/product/([A-Z0-9]{10})',
                   ]:
-                      for asin in re.findall(pat, w):
-                          if asin and asin not in found:
-                              found.append(asin)
-              return found[:6]
+                      for a in re.findall(pat,w,re.I):
+                          if a not in candidates:
+                              candidates.append(a)
+              if candidates:
+                  model_to_asin[model]=candidates[0]
+              print("MODEL_DISCOVERY",model,"positions",len(positions),"candidates",candidates[:8])
 
-          search_url = "https://www.amazon.co.jp/s?k=" + quote(model, safe="")
-          try:
-              search = curl(search_url, 40)
-          except Exception as e:
-              print(f"RESULT | UNKNOWN | {capacity} | {color} | {model} | SEARCH_FETCH_FAIL {e}")
-              raise SystemExit(0)
+          # Match dimension display values back to requested color/capacity.
+          def norm(s):
+              return str(s).replace(" ","").lower()
 
-          asins = candidate_asins(search)
-          print("SEARCH_BYTES", len(search), "CANDIDATES", asins)
+          for asin,vals in asin_to_vals.items():
+              joined=" ".join(map(str,vals if isinstance(vals,list) else [vals]))
+              for cap,color,model in SKUS:
+                  if norm(cap) in norm(joined) and norm(color) in norm(joined):
+                      model_to_asin.setdefault(model,asin)
 
-          if not asins:
-              print(f"RESULT | UNKNOWN | {capacity} | {color} | {model} | ASIN_NOT_FOUND")
-              raise SystemExit(0)
+          # Known 256GB ASINs from prior verified tests.
+          known={
+              "MJX54J/A":"B0HJ9ZYXPV",
+              "MJX64J/A":"B0HJBCT1D5",
+              "MJX74J/A":"B0HJB6YR8X",
+              "MJX84J/A":"B0HJB7L347",
+          }
+          for k,v in known.items():
+              model_to_asin.setdefault(k,v)
 
-          exact = None
-          page = None
-          for asin in asins:
-              url = f"https://www.amazon.co.jp/dp/{asin}"
-              try:
-                  html = curl(url, 40)
-              except Exception as e:
-                  print("ASIN_FETCH_FAIL", asin, str(e)[:140])
+          print("ASIN_MAP",json.dumps(model_to_asin,ensure_ascii=False,sort_keys=True))
+
+          for cap,color,model in SKUS:
+              asin=model_to_asin.get(model)
+              if not asin:
+                  print(f"RESULT | UNKNOWN | {cap} | {color} | {model} | ASIN_NOT_FOUND")
                   continue
 
-              low = html.lower()
-              if (
+              try:
+                  page=curl(f"https://www.amazon.co.jp/dp/{asin}",45)
+              except Exception as e:
+                  print(f"RESULT | UNKNOWN | {cap} | {color} | {model} | FETCH_FAIL {e} | ASIN {asin}")
+                  continue
+
+              low=page.lower()
+              # Exact model is the strongest identity signal. If Amazon omits
+              # model from the rendered page, fall back to capacity + color.
+              identity=(
                   model.lower() in low
-                  and "iphone 18 pro max" in low
-                  and capacity.lower() in low
-              ):
-                  exact = asin
-                  page = html
-                  break
-              print("ASIN_MISMATCH", asin, len(html))
-
-          if not exact or page is None:
-              print(f"RESULT | UNKNOWN | {capacity} | {color} | {model} | EXACT_PRODUCT_NOT_CONFIRMED")
-              raise SystemExit(0)
-
-          availability_pos = page.lower().find('id="availability"')
-          availability = (
-              page[availability_pos:availability_pos + 14000]
-              if availability_pos >= 0 else page
-          )
-
-          for phrase in [
-              "現在在庫切れです",
-              "一時的に在庫切れ",
-              "現在お取り扱いできません",
-          ]:
-              if phrase in availability:
-                  print(
-                      f"RESULT | OUT | {capacity} | {color} | {model} | "
-                      f"{phrase} | ASIN {exact}"
+                  or (
+                      "iphone 18 pro max" in low
+                      and cap.lower() in low
+                      and color.lower() in low
                   )
-                  raise SystemExit(0)
-
-          has_cart = (
-              'id="add-to-cart-button"' in page
-              or 'id="buy-now-button"' in page
-              or 'name="submit.add-to-cart"' in page
-          )
-
-          merchant_pos = page.lower().find('id="merchant-info"')
-          merchant = (
-              page[merchant_pos:merchant_pos + 12000]
-              if merchant_pos >= 0 else ""
-          )
-          sold_by_amazon = "Amazon.co.jp" in merchant
-
-          if has_cart and sold_by_amazon:
-              print(
-                  f"RESULT | IN STOCK | {capacity} | {color} | {model} | "
-                  f"Amazon.co.jp seller + purchase button | ASIN {exact}"
               )
-          elif has_cart:
-              print(
-                  f"RESULT | POSSIBLE | {capacity} | {color} | {model} | "
-                  f"purchase button exists but seller is not Amazon.co.jp | ASIN {exact}"
+              if not identity:
+                  print(f"RESULT | UNKNOWN | {cap} | {color} | {model} | PRODUCT_MISMATCH | ASIN {asin}")
+                  continue
+
+              ap=low.find('id="availability"')
+              availability=page[ap:ap+14000] if ap>=0 else page
+              neg=next((x for x in [
+                  "現在在庫切れです",
+                  "一時的に在庫切れ",
+                  "現在お取り扱いできません",
+              ] if x in availability),None)
+              if neg:
+                  print(f"RESULT | OUT | {cap} | {color} | {model} | {neg} | ASIN {asin}")
+                  time.sleep(1)
+                  continue
+
+              has_cart=(
+                  'id="add-to-cart-button"' in page
+                  or 'id="buy-now-button"' in page
+                  or 'name="submit.add-to-cart"' in page
               )
-          else:
-              print(
-                  f"RESULT | UNKNOWN | {capacity} | {color} | {model} | "
-                  f"no explicit out-of-stock phrase and no purchase button | ASIN {exact}"
-              )
+              mp=low.find('id="merchant-info"')
+              merchant=page[mp:mp+12000] if mp>=0 else ""
+              amazon_seller="Amazon.co.jp" in merchant
+
+              if has_cart and amazon_seller:
+                  print(f"RESULT | IN STOCK | {cap} | {color} | {model} | Amazon.co.jp seller + purchase button | ASIN {asin}")
+              elif has_cart:
+                  print(f"RESULT | POSSIBLE | {cap} | {color} | {model} | purchase button, non-Amazon seller | ASIN {asin}")
+              else:
+                  print(f"RESULT | UNKNOWN | {cap} | {color} | {model} | no explicit stock phrase or purchase button | ASIN {asin}")
+              time.sleep(1)
           PY
