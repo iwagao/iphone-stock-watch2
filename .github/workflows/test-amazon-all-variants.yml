@@ -10,30 +10,8 @@ permissions:
 
 jobs:
   test:
-    strategy:
-      fail-fast: false
-      max-parallel: 4
-      matrix:
-        include:
-          - {capacity: 256GB, color: ブラック, model: MJX54J/A, asin: B0HJ9ZYXPV}
-          - {capacity: 256GB, color: シルバー, model: MJX64J/A, asin: B0HJBCT1D5}
-          - {capacity: 256GB, color: バーガンディ, model: MJX74J/A, asin: B0HJB6YR8X}
-          - {capacity: 256GB, color: グレイシャー, model: MJX84J/A, asin: B0HJB7L347}
-          - {capacity: 512GB, color: ブラック, model: MJX94J/A, asin: B0HJB4296X}
-          - {capacity: 512GB, color: シルバー, model: MJXA4J/A, asin: B0HJB69RVJ}
-          - {capacity: 512GB, color: バーガンディ, model: MJXC4J/A, asin: B0HJB72MGS}
-          - {capacity: 512GB, color: グレイシャー, model: MJXD4J/A, asin: B0HJBHQY2N}
-          - {capacity: 1TB, color: ブラック, model: MJXE4J/A, asin: B0HJB36LR2}
-          - {capacity: 1TB, color: シルバー, model: MJXF4J/A, asin: B0HJB7V8R5}
-          - {capacity: 1TB, color: バーガンディ, model: MJXG4J/A, asin: B0HJB4RVLW}
-          - {capacity: 1TB, color: グレイシャー, model: MJXH4J/A, asin: B0HJB65BLC}
-          - {capacity: 2TB, color: ブラック, model: MJXJ4J/A, asin: B0HJ9VS44C}
-          - {capacity: 2TB, color: シルバー, model: MJXK4J/A, asin: B0HJB4LCRD}
-          - {capacity: 2TB, color: バーガンディ, model: MJXL4J/A, asin: B0HJ9Y9FN4}
-          - {capacity: 2TB, color: グレイシャー, model: MJXM4J/A, asin: B0HJBHHXK2}
-
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -41,84 +19,74 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install --disable-pip-version-check --no-cache-dir -r requirements.txt
-      - name: Check Amazon product directly
+      - name: Check all Amazon variants sequentially
         env:
           NTFY_TOPIC: test-only
-          CAPACITY: ${{ matrix.capacity }}
-          COLOR: ${{ matrix.color }}
-          MODEL: ${{ matrix.model }}
-          ASIN: ${{ matrix.asin }}
         run: |
           python - <<'PY'
-          import os
-          import subprocess
-
+          import time
           import watch
 
-          capacity=os.environ["CAPACITY"]
-          color=os.environ["COLOR"]
-          model=os.environ["MODEL"]
-          asin=os.environ["ASIN"]
-
-          cmd=[
-              "curl","--http1.1","--compressed","-L","-sS","--fail",
-              "--max-time","45",
-              "-A",watch.BROWSER_UA,
-              "-H","Accept-Language: ja-JP,ja;q=0.9,en;q=0.8",
-              "-H","Cache-Control: no-cache",
-              f"https://www.amazon.co.jp/dp/{asin}",
+          SKUS = [
+              ("256GB","ブラック","MJX54J/A","B0HJ9ZYXPV"),
+              ("256GB","シルバー","MJX64J/A","B0HJBCT1D5"),
+              ("256GB","バーガンディ","MJX74J/A","B0HJB6YR8X"),
+              ("256GB","グレイシャー","MJX84J/A","B0HJB7L347"),
+              ("512GB","ブラック","MJX94J/A","B0HJB4296X"),
+              ("512GB","シルバー","MJXA4J/A","B0HJB69RVJ"),
+              ("512GB","バーガンディ","MJXC4J/A","B0HJB72MGS"),
+              ("512GB","グレイシャー","MJXD4J/A","B0HJBHQY2N"),
+              ("1TB","ブラック","MJXE4J/A","B0HJB36LR2"),
+              ("1TB","シルバー","MJXF4J/A","B0HJB7V8R5"),
+              ("1TB","バーガンディ","MJXG4J/A","B0HJB4RVLW"),
+              ("1TB","グレイシャー","MJXH4J/A","B0HJB65BLC"),
+              ("2TB","ブラック","MJXJ4J/A","B0HJ9VS44C"),
+              ("2TB","シルバー","MJXK4J/A","B0HJB4LCRD"),
+              ("2TB","バーガンディ","MJXL4J/A","B0HJ9Y9FN4"),
+              ("2TB","グレイシャー","MJXM4J/A","B0HJBHHXK2"),
           ]
-          p=subprocess.run(cmd,capture_output=True,timeout=50)
-          if p.returncode != 0:
-              err=p.stderr.decode("utf-8","ignore").strip()
-              print(f"RESULT | UNKNOWN | {capacity} | {color} | {model} | FETCH_FAIL rc={p.returncode} {err[:160]} | ASIN {asin}")
-              raise SystemExit(0)
 
-          page=p.stdout.decode("utf-8","ignore")
-          low=page.lower()
-          print("BYTES",len(page),"MODEL_COUNT",low.count(model.lower()))
+          for capacity,color,model,asin in SKUS:
+              watch.MODEL=model
+              url=f"https://www.amazon.co.jp/dp/{asin}"
 
-          if len(page)<100000:
-              print(f"RESULT | UNKNOWN | {capacity} | {color} | {model} | RESPONSE_TOO_SHORT {len(page)} | ASIN {asin}")
-              raise SystemExit(0)
+              try:
+                  page=watch.fetch_amazon(url)
+              except Exception as e:
+                  print(f"RESULT | UNKNOWN | {capacity} | {color} | {model} | FETCH_FAIL {e} | ASIN {asin}")
+                  time.sleep(3)
+                  continue
 
-          identity=(
-              model.lower() in low
-              or (
-                  "iphone 18 pro max" in low
-                  and capacity.lower() in low
-                  and color.lower() in low
+              low=page.lower()
+              ap=low.find('id="availability"')
+              availability=page[ap:ap+14000] if ap>=0 else page
+
+              neg=next((x for x in [
+                  "現在在庫切れです",
+                  "一時的に在庫切れ",
+                  "現在お取り扱いできません",
+              ] if x in availability or x in page),None)
+
+              if neg:
+                  print(f"RESULT | OUT | {capacity} | {color} | {model} | {neg} | ASIN {asin}")
+                  time.sleep(3)
+                  continue
+
+              has_cart=(
+                  'id="add-to-cart-button"' in page
+                  or 'id="buy-now-button"' in page
+                  or 'name="submit.add-to-cart"' in page
               )
-          )
-          if not identity:
-              print(f"RESULT | UNKNOWN | {capacity} | {color} | {model} | PRODUCT_MISMATCH | ASIN {asin}")
-              raise SystemExit(0)
+              mp=low.find('id="merchant-info"')
+              merchant=page[mp:mp+12000] if mp>=0 else ""
+              amazon_seller="Amazon.co.jp" in merchant
 
-          ap=low.find('id="availability"')
-          availability=page[ap:ap+14000] if ap>=0 else page
+              if has_cart and amazon_seller:
+                  print(f"RESULT | IN STOCK | {capacity} | {color} | {model} | Amazon.co.jp seller + purchase button | ASIN {asin}")
+              elif has_cart:
+                  print(f"RESULT | POSSIBLE | {capacity} | {color} | {model} | purchase button but non-Amazon seller | ASIN {asin}")
+              else:
+                  print(f"RESULT | UNKNOWN | {capacity} | {color} | {model} | no explicit out-of-stock phrase and no purchase button | ASIN {asin}")
 
-          for phrase in [
-              "現在在庫切れです",
-              "一時的に在庫切れ",
-              "現在お取り扱いできません",
-          ]:
-              if phrase in availability:
-                  print(f"RESULT | OUT | {capacity} | {color} | {model} | {phrase} | ASIN {asin}")
-                  raise SystemExit(0)
-
-          has_cart=(
-              'id="add-to-cart-button"' in page
-              or 'id="buy-now-button"' in page
-              or 'name="submit.add-to-cart"' in page
-          )
-          mp=low.find('id="merchant-info"')
-          merchant=page[mp:mp+12000] if mp>=0 else ""
-          amazon_seller="Amazon.co.jp" in merchant
-
-          if has_cart and amazon_seller:
-              print(f"RESULT | IN STOCK | {capacity} | {color} | {model} | Amazon.co.jp seller + purchase button | ASIN {asin}")
-          elif has_cart:
-              print(f"RESULT | POSSIBLE | {capacity} | {color} | {model} | purchase button but non-Amazon seller | ASIN {asin}")
-          else:
-              print(f"RESULT | UNKNOWN | {capacity} | {color} | {model} | no explicit out-of-stock phrase and no purchase button | ASIN {asin}")
+              time.sleep(3)
           PY
