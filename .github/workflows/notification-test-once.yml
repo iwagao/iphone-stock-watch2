@@ -1,0 +1,40 @@
+name: One-time ntfy notification test
+on:
+  push:
+    paths:
+      - .github/workflows/notification-test-once.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Send clearly labeled test notification
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          if [ -z "$NTFY_TOPIC" ]; then
+            echo "TEST NOTIFY FAILED: NTFY_TOPIC missing"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json, os, urllib.request
+          payload = {
+              "topic": os.environ["NTFY_TOPIC"],
+              "title": "iPhone 在庫監視 通知テスト",
+              "message": "【テスト通知】GitHub Actionsから送信しました。実際の在庫検知ではありません。",
+              "priority": 4,
+              "tags": ["test_tube"],
+          }
+          request = urllib.request.Request(
+              "https://ntfy.sh",
+              data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+              headers={"Content-Type": "application/json; charset=utf-8"},
+              method="POST",
+          )
+          with urllib.request.urlopen(request, timeout=15) as response:
+              result = json.loads(response.read())
+              print("TEST NOTIFY SENT / HTTP", response.status, "/ message-id", result.get("id", "unknown"))
+          PY
