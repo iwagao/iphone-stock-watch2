@@ -4,6 +4,7 @@ import re
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -13,6 +14,7 @@ JAN = "4549995734546"
 MAX_PRICE = 239800
 NTFY_TOPIC = os.environ["NTFY_TOPIC"]
 STATE_FILE = Path("state.json")
+HISTORY_FILE = Path("stock_history.jsonl")
 
 BROWSER_UA = (
     "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro XL) "
@@ -442,6 +444,20 @@ def save_state(state):
     )
 
 
+def record_detection(target, reason, notification):
+    event = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "store": target["name"],
+        "model": MODEL,
+        "status": "IN STOCK",
+        "reason": reason,
+        "product_url": target["url"],
+        "notification": notification,
+    }
+    with HISTORY_FILE.open("a", encoding="utf-8") as out:
+        out.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
 def notify(target, reason):
     message = (
         f"{target['name']}で iPhone 18 Pro Max 256GB ブラックの在庫を"
@@ -513,7 +529,15 @@ def main():
             print(f"{name}: {status} ({reason})")
 
             if available is True and not before:
-                notify(target, reason)
+                notification = "NOT_ATTEMPTED"
+                try:
+                    notify(target, reason)
+                    notification = "SENT"
+                except Exception as notify_error:
+                    notification = f"FAILED: {type(notify_error).__name__}"
+                    print(f"NOTIFY FAILED: {name} / {notify_error}", file=sys.stderr)
+                finally:
+                    record_detection(target, reason, notification)
 
             if available is not None:
                 state[name] = available
