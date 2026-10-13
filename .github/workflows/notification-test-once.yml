@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      - uses: actions/checkout@v4
       - name: Send clearly labeled test notification
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
@@ -21,10 +22,21 @@ jobs:
           fi
           python3 - <<'PY'
           import json, os, urllib.request
+          from pathlib import Path
+          state_path = Path("state.json")
+          if state_path.exists():
+              state = json.loads(state_path.read_text(encoding="utf-8"))
+              lines = ["【通知テスト／保存済み判定】", "最終保存状態（現在の在庫を保証しません）"]
+              for store, in_stock in state.items():
+                  lines.append(f"{store}: {'IN STOCK' if in_stock else 'OUT（最終確定判定）'}")
+              lines.append("UNKNOWN・最終確認日時はこのファイルでは記録されていません。")
+              summary = "\\n".join(lines)
+          else:
+              summary = "保存済みの在庫状態を取得できませんでした。"
           payload = {
               "topic": os.environ["NTFY_TOPIC"],
               "title": "iPhone 在庫監視 通知テスト",
-              "message": "【テスト通知】GitHub Actionsから送信しました。実際の在庫検知ではありません。",
+              "message": summary,
               "priority": 4,
               "tags": ["test_tube"],
           }
