@@ -15,6 +15,7 @@ MAX_PRICE = 239800
 NTFY_TOPIC = os.environ["NTFY_TOPIC"]
 STATE_FILE = Path("state.json")
 HISTORY_FILE = Path("stock_history.jsonl")
+LATEST_FILE = Path("latest_results.json")
 
 BROWSER_UA = (
     "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro XL) "
@@ -518,6 +519,7 @@ def main():
         send_test_notification()
         return
     state = load_state()
+    latest = {"results": {}}
 
     for target in TARGETS:
         name = target["name"]
@@ -548,6 +550,7 @@ def main():
                 else ("IN STOCK" if available else "OUT")
             )
             print(f"{name}: {status} ({reason})")
+            latest["results"][name] = {"status": status, "checked_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds")}
 
             if available is True and not before:
                 notification = "NOT_ATTEMPTED"
@@ -565,8 +568,10 @@ def main():
 
         except Exception as e:
             print(f"{name}: UNKNOWN (FETCH_FAIL {e})", file=sys.stderr)
+            latest["results"][name] = {"status": "UNKNOWN", "checked_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds")}
 
     save_state(state)
+    LATEST_FILE.write_text(json.dumps(latest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
