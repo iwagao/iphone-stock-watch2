@@ -495,7 +495,28 @@ def notify(target, reason):
     )
 
 
+def send_test_notification():
+    """Send a marked test without checking stores or changing stock state."""
+    payload = {
+        "topic": NTFY_TOPIC,
+        "title": "iPhone 在庫監視 通知テスト",
+        "message": "【テスト通知】GitHub Actionsからの通知テストです。実際の在庫検知ではありません。",
+        "priority": 4,
+        "tags": ["test_tube"],
+    }
+    r = requests.post("https://ntfy.sh", json=payload, timeout=15)
+    r.raise_for_status()
+    try:
+        message_id = r.json().get("id", "unknown")
+    except ValueError:
+        message_id = "unknown"
+    print(f"TEST NOTIFY SENT / HTTP {r.status_code} / message-id {message_id}")
+
+
 def main():
+    if os.environ.get("NOTIFICATION_TEST") == "true":
+        send_test_notification()
+        return
     state = load_state()
 
     for target in TARGETS:
