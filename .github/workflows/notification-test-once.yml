@@ -26,13 +26,12 @@ jobs:
           state_path = Path("state.json")
           if state_path.exists():
               state = json.loads(state_path.read_text(encoding="utf-8"))
-              lines = ["【通知テスト／保存済み判定】", "最終保存状態（現在の在庫を保証しません）"]
+              lines = ["【在庫確認テスト】"]
               for store, in_stock in state.items():
-                  lines.append(f"{store}: {'IN STOCK' if in_stock else 'OUT（最終確定判定）'}")
-              lines.append("UNKNOWN・最終確認日時はこのファイルでは記録されていません。")
+                  lines.append(f"{store}: {'○' if in_stock is True else '×' if in_stock is False else '？'}")
               summary = "\n".join(lines)
           else:
-              summary = "保存済みの在庫状態を取得できませんでした。"
+              summary = "在庫確認: ？"
           payload = {
               "topic": os.environ["NTFY_TOPIC"],
               "title": "iPhone 在庫監視 通知テスト",
