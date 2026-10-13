@@ -83,17 +83,20 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python watch.py
 
-      - name: Save stock state
+      - name: Save stock state and detection history
         if: steps.guard.outputs.run_check == 'true'
         run: |
-          if git diff --quiet -- state.json; then
-            echo "No state change"
+          git add state.json
+          if [ -f stock_history.jsonl ]; then
+            git add stock_history.jsonl
+          fi
+          if git diff --cached --quiet; then
+            echo "No state or detection history change"
             exit 0
           fi
           git config user.name "iphone-stock-bot"
           git config user.email "iphone-stock-bot@users.noreply.github.com"
-          git add state.json
-          git commit -m "Update stock state"
+          git commit -m "Update stock state and detection history"
           git pull --rebase origin main
           git push
 
