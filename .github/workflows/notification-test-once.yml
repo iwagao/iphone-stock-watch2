@@ -26,19 +26,26 @@ jobs:
           from datetime import datetime, timezone, timedelta
           latest_path = Path("latest_results.json")
           lines = ["【在庫確認テスト】"]
+          latest_time = None
           if latest_path.exists():
               latest = json.loads(latest_path.read_text(encoding="utf-8"))
               for store, result in latest.get("results", {}).items():
                   status = {"IN STOCK": "○", "OUT": "×", "UNKNOWN": "？"}.get(result.get("status"), "？")
+                  lines.append(f"{store}: {status}")
                   checked = result.get("checked_at_utc")
                   try:
-                      dt = datetime.fromisoformat(checked.replace("Z", "+00:00")).astimezone(timezone(timedelta(hours=9)))
-                      when = dt.strftime("%m/%d %H:%M")
+                      dt = datetime.fromisoformat(checked.replace("Z", "+00:00"))
+                      if dt.tzinfo is not None and (latest_time is None or dt > latest_time):
+                          latest_time = dt
                   except (ValueError, AttributeError, TypeError):
-                      when = "時刻不明"
-                  lines.append(f"{store}: {status}  {when}")
+                      pass
           else:
-              lines.append("検出時刻: ？（次回監視から記録）")
+              lines.append("判定結果: ？")
+          if latest_time is not None:
+              jst = latest_time.astimezone(timezone(timedelta(hours=9)))
+              lines.insert(1, "最終確認: " + jst.strftime("%m/%d %H:%M"))
+          else:
+              lines.insert(1, "最終確認: 時刻不明")
           summary = "\n".join(lines)
           payload = {
               "topic": os.environ["NTFY_TOPIC"],
