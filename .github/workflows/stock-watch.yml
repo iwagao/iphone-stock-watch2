@@ -93,7 +93,7 @@ jobs:
       - name: Save stock state and detection history
         if: steps.guard.outputs.run_check == 'true' && inputs.notification_test != true
         run: |
-          git add state.json
+          git add state.json latest_results.json
           if [ -f stock_history.jsonl ]; then
             git add stock_history.jsonl
           fi
