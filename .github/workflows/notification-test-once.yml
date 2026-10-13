@@ -23,15 +23,23 @@ jobs:
           python3 - <<'PY'
           import json, os, urllib.request
           from pathlib import Path
-          state_path = Path("state.json")
-          if state_path.exists():
-              state = json.loads(state_path.read_text(encoding="utf-8"))
-              lines = ["【在庫確認テスト】"]
-              for store, in_stock in state.items():
-                  lines.append(f"{store}: {'○' if in_stock is True else '×' if in_stock is False else '？'}")
-              summary = "\n".join(lines)
+          from datetime import datetime, timezone, timedelta
+          latest_path = Path("latest_results.json")
+          lines = ["【在庫確認テスト】"]
+          if latest_path.exists():
+              latest = json.loads(latest_path.read_text(encoding="utf-8"))
+              for store, result in latest.get("results", {}).items():
+                  status = {"IN STOCK": "○", "OUT": "×", "UNKNOWN": "？"}.get(result.get("status"), "？")
+                  checked = result.get("checked_at_utc")
+                  try:
+                      dt = datetime.fromisoformat(checked.replace("Z", "+00:00")).astimezone(timezone(timedelta(hours=9)))
+                      when = dt.strftime("%m/%d %H:%M")
+                  except (ValueError, AttributeError, TypeError):
+                      when = "時刻不明"
+                  lines.append(f"{store}: {status}  {when}")
           else:
-              summary = "在庫確認: ？"
+              lines.append("検出時刻: ？（次回監視から記録）")
+          summary = "\n".join(lines)
           payload = {
               "topic": os.environ["NTFY_TOPIC"],
               "title": "iPhone 在庫監視 通知テスト",
