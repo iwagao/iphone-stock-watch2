@@ -1,0 +1,20 @@
+{
+  "results": {
+    "Amazon.co.jp": {
+      "status": "OUT",
+      "checked_at_utc": "2026-10-13T12:04:56+00:00"
+    },
+    "ヤマダウェブコム": {
+      "status": "OUT",
+      "checked_at_utc": "2026-10-13T12:05:05+00:00"
+    },
+    "ケーズデンキ": {
+      "status": "UNKNOWN",
+      "checked_at_utc": "2026-10-13T12:05:20+00:00"
+    },
+    "ヨドバシカメラ": {
+      "status": "OUT",
+      "checked_at_utc": "2026-10-13T12:05:29+00:00"
+    }
+  }
+}
