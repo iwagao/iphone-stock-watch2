@@ -5,6 +5,12 @@ on:
   schedule:
     - cron: "17 * * * *"
   workflow_dispatch:
+    inputs:
+      notification_test:
+        description: 'Send test notification only (no stock check or state changes)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -77,14 +83,15 @@ jobs:
           fi
           echo "Notification secret is configured"
 
-      - name: Check four stores
+      - name: Check four stores or send test notification
         if: steps.guard.outputs.run_check == 'true'
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NOTIFICATION_TEST: ${{ inputs.notification_test }}
         run: python watch.py
 
       - name: Save stock state and detection history
-        if: steps.guard.outputs.run_check == 'true'
+        if: steps.guard.outputs.run_check == 'true' && inputs.notification_test != true
         run: |
           git add state.json
           if [ -f stock_history.jsonl ]; then
@@ -101,7 +108,7 @@ jobs:
           git push
 
       - name: Start next check
-        if: steps.guard.outputs.run_check == 'true' && success()
+        if: steps.guard.outputs.run_check == 'true' && inputs.notification_test != true && success()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
