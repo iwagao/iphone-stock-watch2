@@ -30,7 +30,7 @@ jobs:
               for store, in_stock in state.items():
                   lines.append(f"{store}: {'IN STOCK' if in_stock else 'OUT（最終確定判定）'}")
               lines.append("UNKNOWN・最終確認日時はこのファイルでは記録されていません。")
-              summary = "\\n".join(lines)
+              summary = "\n".join(lines)
           else:
               summary = "保存済みの在庫状態を取得できませんでした。"
           payload = {
