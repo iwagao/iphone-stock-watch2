@@ -1,6 +1,9 @@
 name: iPhone Stock Watch
 
 on:
+  push:
+    paths:
+      - .github/workflows/stock-watch.yml
   # Hourly recovery only. Normal monitoring continues with workflow_dispatch.
   schedule:
     - cron: "17 * * * *"
