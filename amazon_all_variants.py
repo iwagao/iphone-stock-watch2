@@ -1,5 +1,9 @@
 import subprocess
 import time
+import json
+import os
+import urllib.request
+from pathlib import Path
 
 BROWSER_UA = (
     "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro XL) "
@@ -104,6 +108,41 @@ def check(capacity, color, model, asin):
     return "UNKNOWN", "no explicit stock phrase or purchase button", url
 
 
+def notify_new_stock(results):
+    state_file = Path("amazon_variants_state.json")
+    try:
+        previous = json.loads(state_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        previous = {}
+    current = dict(previous)
+    newly_available = []
+    for capacity, color, model, asin, status, reason, url in results:
+        if status == "IN STOCK":
+            if previous.get(asin) != "IN STOCK":
+                newly_available.append((capacity, color, model, asin, url))
+            current[asin] = "IN STOCK"
+        elif status == "OUT":
+            current[asin] = "OUT"
+        # Unknown/POSSIBLE do not reset last confirmed stock state.
+
+    topic = os.environ.get("NTFY_TOPIC", "").strip()
+    if newly_available and not topic:
+        raise RuntimeError("NTFY_TOPIC missing")
+    for capacity, color, model, asin, url in newly_available:
+        body = f"Amazon iPhone 18 Pro Max {capacity} {color} ({model})\n購入ページ: {url}"
+        request = urllib.request.Request(
+            f"https://ntfy.sh/{topic}",
+            data=body.encode("utf-8"),
+            headers={"Title": "iPhone 18 Pro Max Amazon stock", "Click": url},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=20) as response:
+            if response.status >= 300:
+                raise RuntimeError(f"ntfy HTTP {response.status}")
+        print(f"NOTIFIED: {model} {url}")
+    state_file.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def main():
     results = []
 
@@ -119,6 +158,8 @@ def main():
         )
         if i < len(SKUS):
             time.sleep(3)
+
+    notify_new_stock(results)
 
     print("\n" + "=" * 72)
     print("SUMMARY")
