@@ -4,8 +4,6 @@ on:
   push:
     paths:
       - .github/workflows/amazon-all-variants.yml
-  schedule:
-    - cron: "23 * * * *"
   workflow_dispatch:
 
 permissions:
