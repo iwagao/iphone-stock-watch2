@@ -1,6 +1,9 @@
 name: Amazon All Variants Manual Check
 
 on:
+  push:
+    paths:
+      - .github/workflows/amazon-all-variants.yml
   workflow_dispatch:
 
 permissions:
