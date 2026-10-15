@@ -2,19 +2,19 @@
   "results": {
     "Amazon.co.jp": {
       "status": "OUT",
-      "checked_at_utc": "2026-10-15T06:26:55+00:00"
+      "checked_at_utc": "2026-10-15T06:32:47+00:00"
     },
     "ヤマダウェブコム": {
       "status": "OUT",
-      "checked_at_utc": "2026-10-15T06:27:06+00:00"
+      "checked_at_utc": "2026-10-15T06:32:57+00:00"
     },
     "ケーズデンキ": {
       "status": "UNKNOWN",
-      "checked_at_utc": "2026-10-15T06:27:35+00:00"
+      "checked_at_utc": "2026-10-15T06:33:25+00:00"
     },
     "ヨドバシカメラ": {
-      "status": "UNKNOWN",
-      "checked_at_utc": "2026-10-15T06:28:02+00:00"
+      "status": "OUT",
+      "checked_at_utc": "2026-10-15T06:33:30+00:00"
     }
   }
 }
